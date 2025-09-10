@@ -21,12 +21,18 @@ import io.ktor.serialization.kotlinx.json.*
 import kotlinx.coroutines.*
 import kotlinx.serialization.*
 import kotlinx.serialization.json.*
+import javax.net.ssl.SSLContext
+import javax.net.ssl.TrustManager
 import javax.net.ssl.X509TrustManager
 
 // Configure TLS to support older versions globally
 fun configureTLS() {
     System.setProperty("https.protocols", "TLSv1,TLSv1.1,TLSv1.2,TLSv1.3")
     System.setProperty("jdk.tls.client.protocols", "TLSv1,TLSv1.1,TLSv1.2,TLSv1.3")
+    System.setProperty("javax.net.ssl.trustStoreType", "JKS")
+    // Force older TLS versions
+    System.setProperty("jdk.tls.client.enableStatusRequestExtension", "false")
+    System.setProperty("com.sun.net.ssl.checkRevocation", "false")
 }
 
 val client = HttpClient(CIO) {
