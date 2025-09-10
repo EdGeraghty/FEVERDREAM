@@ -81,6 +81,7 @@ val sessionKeys = mutableMapOf<String, SecretKey>()
 // Global state for Matrix client
 var currentAccessToken: String? = null
 var currentHomeserver: String = "https://matrix.org"
+var currentDeviceId: String? = null
 
 // Initialize custom Olm-like encryption
 fun initializeEncryption() {
@@ -149,7 +150,7 @@ fun encryptMessageCustom(message: String, deviceId: String): String? {
         val iv = cipher.iv
         val combined = iv + ciphertext
 
-        java.util.Base64.getEncoder().encodeToString(combined)
+        java.util.Base64.getUrlEncoder().encodeToString(combined)
     } catch (e: Exception) {
         println("❌ Custom encryption failed: ${e.message}")
         null
@@ -162,8 +163,27 @@ fun decryptMessageCustom(encryptedMessage: String, deviceId: String): String? {
         // Use the same deterministic key derivation for decryption
         val derivedKey = deriveKeyFromDeviceId(deviceId)
 
-        // Decode the combined IV + ciphertext
-        val combined = java.util.Base64.getDecoder().decode(encryptedMessage)
+        // Try to decode with different base64 variants for maximum compatibility
+        val combined = try {
+            java.util.Base64.getUrlDecoder().decode(encryptedMessage)
+        } catch (e: Exception) {
+            try {
+                // Fallback to standard base64
+                java.util.Base64.getDecoder().decode(encryptedMessage)
+            } catch (e2: Exception) {
+                // Handle URL-safe base64 with padding issues or other variants
+                val cleanedMessage = encryptedMessage
+                    .replace('-', '+')
+                    .replace('_', '/')
+                    .replace(Regex("[^A-Za-z0-9+/]"), "") // Remove invalid characters
+                val paddedMessage = when (cleanedMessage.length % 4) {
+                    2 -> cleanedMessage + "=="
+                    3 -> cleanedMessage + "="
+                    else -> cleanedMessage
+                }
+                java.util.Base64.getDecoder().decode(paddedMessage)
+            }
+        }
 
         // Extract IV (first 12 bytes for GCM) and ciphertext
         val iv = combined.copyOfRange(0, 12)
@@ -447,6 +467,8 @@ suspend fun login(username: String, password: String, homeserver: String): Login
             if (response.status == HttpStatusCode.OK) {
                 val loginResponse = response.body<LoginResponse>()
                 currentAccessToken = loginResponse.access_token
+                currentDeviceId = loginResponse.device_id
+                println("🔑 Logged in with device ID: ${currentDeviceId}")
                 // Initialize encryption system after successful login
                 initializeEncryption()
                 return loginResponse
@@ -472,6 +494,8 @@ suspend fun login(username: String, password: String, homeserver: String): Login
                         if (oldResponse.status == HttpStatusCode.OK) {
                             val loginResponse = oldResponse.body<LoginResponse>()
                             currentAccessToken = loginResponse.access_token
+                            currentDeviceId = loginResponse.device_id
+                            println("🔑 Logged in with device ID: ${currentDeviceId}")
                             println("Login successful with older format")
                             return loginResponse
                         } else {
@@ -513,6 +537,8 @@ suspend fun login(username: String, password: String, homeserver: String): Login
                 if (fallbackResponse.status == HttpStatusCode.OK) {
                     val loginResponse = fallbackResponse.body<LoginResponse>()
                     currentAccessToken = loginResponse.access_token
+                    currentDeviceId = loginResponse.device_id
+                    println("🔑 Logged in with device ID: ${currentDeviceId}")
                     return loginResponse
                 }
             }
@@ -604,14 +630,14 @@ suspend fun sendMessage(roomId: String, message: String): Boolean {
         if (isEncrypted) {
             try {
                 // Use custom Olm-like encryption with consistent device ID
-                val deviceId = "FEVERDREAM_DEVICE" // Fixed device ID for this session
+                val deviceId = currentDeviceId ?: "FEVERDREAM_DEVICE"
                 val encryptedText = encryptMessageCustom(message, deviceId)
 
                 if (encryptedText != null) {
                     val encryptedContent = EncryptedSendMessageRequest(
                         ciphertext = encryptedText,
                         device_id = deviceId,
-                        sender_key = java.util.Base64.getEncoder().encodeToString(identityKeyPair?.public?.encoded ?: byteArrayOf()),
+                        sender_key = java.util.Base64.getUrlEncoder().encodeToString(identityKeyPair?.public?.encoded ?: byteArrayOf()),
                         session_id = deviceId
                     )
 
@@ -1031,8 +1057,8 @@ fun MessageItem(message: Event) {
             try {
                 val encryptedContent = json.decodeFromJsonElement<EncryptedMessageContent>(message.content)
 
-                // Use the same consistent device ID for decryption
-                val deviceId = "FEVERDREAM_DEVICE" // Same device ID used for encryption
+                // Use the device_id from the encrypted message for decryption
+                val deviceId = encryptedContent.device_id ?: currentDeviceId ?: "FEVERDREAM_DEVICE"
                 val decryptedText = decryptMessageCustom(encryptedContent.ciphertext, deviceId)
 
                 if (decryptedText != null) {
