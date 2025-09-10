@@ -344,8 +344,12 @@ fun App() {
         if (loginResponse == null) {
             LoginScreen(
                 onLogin = { username, password, hs ->
-                    if (username.isBlank() || password.isBlank() || hs.isBlank()) {
-                        error = "Please fill in all fields"
+                    // Allow empty homeserver if username contains domain
+                    val homeserverRequired = !username.contains(":")
+                    if (username.isBlank() || password.isBlank() || (homeserverRequired && hs.isBlank())) {
+                        error = if (username.isBlank()) "Please enter a username"
+                               else if (password.isBlank()) "Please enter a password"
+                               else "Please enter a homeserver or use username@domain format"
                         return@LoginScreen
                     }
                     isLoading = true
