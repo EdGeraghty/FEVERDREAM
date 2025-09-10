@@ -185,7 +185,15 @@ fun decryptMessageCustom(encryptedMessage: String, deviceId: String): String? {
             }
         }
 
+        // Debug logging for troubleshooting
+        if (combined.size < 13) {
+            println("⚠️  Decoded data too short: ${combined.size} bytes, expected at least 13")
+        }
+
         // Extract IV (first 12 bytes for GCM) and ciphertext
+        if (combined.size < 13) { // Need at least 12 bytes for IV + 1 byte for ciphertext
+            throw Exception("Decoded data too short for decryption: ${combined.size} bytes, need at least 13")
+        }
         val iv = combined.copyOfRange(0, 12)
         val ciphertext = combined.copyOfRange(12, combined.size)
 
