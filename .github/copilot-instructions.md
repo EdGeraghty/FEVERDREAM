@@ -53,7 +53,7 @@
 	Verify that all previous steps have been completed.
 	Prompt user for debug mode, launch only if confirmed.
 	 -->
-	Application launched successfully.
+	Application launched successfully in background. Ready for testing encryption workflow.
 
 - [x] Ensure Documentation is Complete
 	<!--

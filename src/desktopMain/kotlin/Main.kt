@@ -285,16 +285,44 @@ suspend fun discoverHomeserver(domain: String): String {
 data class SendMessageRequest(val msgtype: String = "m.text", val body: String)
 
 @Serializable
-data class EncryptedSendMessageRequest(
-    val algorithm: String = "m.custom.feverdream.v1",
-    val ciphertext: String,
-    val device_id: String,
-    val sender_key: String,
-    val session_id: String
+data class RoomMessagesResponse(val chunk: List<Event>)
+
+@Serializable
+data class RoomMembersResponse(val chunk: List<MemberEvent>)
+
+@Serializable
+data class MemberEvent(
+    val type: String,
+    val state_key: String,
+    val sender: String,
+    val content: MemberContent,
+    val origin_server_ts: Long
 )
 
 @Serializable
-data class RoomMessagesResponse(val chunk: List<Event>)
+data class MemberContent(
+    val membership: String,
+    val displayname: String? = null,
+    val avatar_url: String? = null
+)
+
+suspend fun getRoomMembers(roomId: String): List<String> {
+    val token = currentAccessToken ?: return emptyList()
+    try {
+        val response = client.get("$currentHomeserver/_matrix/client/v3/rooms/$roomId/members") {
+            bearerAuth(token)
+        }
+        if (response.status == HttpStatusCode.OK) {
+            val membersResponse = response.body<RoomMembersResponse>()
+            return membersResponse.chunk
+                .filter { it.content.membership == "join" }
+                .map { it.state_key }
+        }
+    } catch (e: Exception) {
+        println("Get room members failed: ${e.message}")
+    }
+    return emptyList()
+}
 
 suspend fun login(username: String, password: String, homeserver: String): LoginResponse? {
     try {
@@ -518,10 +546,97 @@ suspend fun sendMessage(roomId: String, message: String): Boolean {
             try {
                 val machine = olmMachine ?: throw Exception("OlmMachine not initialized")
 
-                // Create the message content as JSON
-                val messageContent = json.encodeToString(MessageContent("m.text", message))
+                // Step 1: Get room members
+                val roomMembers = getRoomMembers(roomId)
+                val roomMembersCount = roomMembers.size
+                println("🔍 Found $roomMembersCount room members: ${roomMembers.joinToString(", ")}")
 
-                // Use OlmMachine to encrypt - it handles Megolm session management internally
+                // Step 2: Establish Olm sessions with room members
+                val missingSessions = machine.getMissingSessions(roomMembers)
+                val missingSessionsCount = (missingSessions as? Collection<*>)?.size ?: 0
+                println("🔑 Missing sessions for $missingSessionsCount users")
+
+                // Step 3: Send any outgoing requests to establish sessions
+                val sessionRequests = machine.outgoingRequests()
+                for (request in sessionRequests) {
+                    when (request) {
+                        is Request.ToDevice -> {
+                            println("📤 Sending to-device request: ${request.eventType}")
+                            val response = client.put("$currentHomeserver/_matrix/client/v3/sendToDevice/${request.eventType}/${System.currentTimeMillis()}") {
+                                bearerAuth(token)
+                                contentType(ContentType.Application.Json)
+                                setBody(request.body)
+                            }
+                            if (response.status != HttpStatusCode.OK) {
+                                println("❌ Failed to send to-device request: ${response.status}")
+                            }
+                        }
+                        is Request.KeysUpload -> {
+                            println("📤 Sending keys upload request")
+                            val response = client.post("$currentHomeserver/_matrix/client/v3/keys/upload") {
+                                bearerAuth(token)
+                                contentType(ContentType.Application.Json)
+                                setBody(request.body)
+                            }
+                            if (response.status != HttpStatusCode.OK) {
+                                println("❌ Failed to upload keys: ${response.status}")
+                            }
+                        }
+                        is Request.KeysQuery -> {
+                            val usersMap = request.users as? Map<*, *>
+                            val userCount = usersMap?.size ?: 0
+                            println("📤 Sending keys query request for $userCount users")
+                            val response = client.post("$currentHomeserver/_matrix/client/v3/keys/query") {
+                                bearerAuth(token)
+                                contentType(ContentType.Application.Json)
+                                setBody(mapOf("device_keys" to request.users.associateWith { emptyMap<String, Any>() }))
+                            }
+                            if (response.status != HttpStatusCode.OK) {
+                                println("❌ Failed to query keys: ${response.status}")
+                            }
+                        }
+                        else -> {
+                            println("⚠️  Unhandled request type: ${request::class.simpleName}")
+                        }
+                    }
+                }
+
+                // Step 4: Share room key with room members
+                val encryptionSettings = EncryptionSettings(
+                    algorithm = EventEncryptionAlgorithm.MEGOLM_V1_AES_SHA2,
+                    rotationPeriod = 604800000UL, // 7 days in milliseconds
+                    rotationPeriodMsgs = 100UL, // 100 messages
+                    historyVisibility = HistoryVisibility.SHARED,
+                    onlyAllowTrustedDevices = false,
+                    errorOnVerifiedUserProblem = false
+                )
+
+                val roomKeyRequests = machine.shareRoomKey(roomId, roomMembers, encryptionSettings)
+                val roomMembersCount2 = roomMembers.size
+                println("🔐 Sharing room key with $roomMembersCount2 members")
+
+                // Step 5: Send room key sharing requests
+                for (request in roomKeyRequests) {
+                    when (request) {
+                        is Request.ToDevice -> {
+                            println("📤 Sending room key to-device request: ${request.eventType}")
+                            val response = client.put("$currentHomeserver/_matrix/client/v3/sendToDevice/${request.eventType}/${System.currentTimeMillis()}") {
+                                bearerAuth(token)
+                                contentType(ContentType.Application.Json)
+                                setBody(request.body)
+                            }
+                            if (response.status != HttpStatusCode.OK) {
+                                println("❌ Failed to send room key: ${response.status}")
+                            }
+                        }
+                        else -> {
+                            println("⚠️  Unhandled room key request type: ${request::class.simpleName}")
+                        }
+                    }
+                }
+
+                // Step 6: Encrypt the message
+                val messageContent = json.encodeToString(MessageContent("m.text", message))
                 val encryptedContent = machine.encrypt(roomId, "m.room.message", messageContent)
 
                 println("🔐 Sending Matrix SDK Crypto encrypted message to room $roomId")
@@ -534,6 +649,7 @@ suspend fun sendMessage(roomId: String, message: String): Boolean {
                 return response.status == HttpStatusCode.OK
             } catch (e: Exception) {
                 println("❌ Matrix SDK Crypto encryption failed: ${e.message}")
+                e.printStackTrace()
                 return false
             }
         } else {
@@ -546,6 +662,7 @@ suspend fun sendMessage(roomId: String, message: String): Boolean {
         }
     } catch (e: Exception) {
         println("Send message failed: ${e.message}")
+        e.printStackTrace()
     }
     return false
 }
