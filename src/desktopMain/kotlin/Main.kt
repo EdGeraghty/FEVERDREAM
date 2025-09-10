@@ -769,8 +769,7 @@ suspend fun sendMessage(roomId: String, message: String): Boolean {
                 val response = client.put("$currentHomeserver/_matrix/client/v3/rooms/$roomId/send/m.room.encrypted/${System.currentTimeMillis()}") {
                     bearerAuth(token)
                     contentType(ContentType.Application.Json)
-                    @Suppress("UNCHECKED_CAST")
-                    setBody(convertMapToHashMap(encryptedContent) as Map<String, Any>)
+                    setBody(json.parseToJsonElement(encryptedContent))
                 }
                 return response.status == HttpStatusCode.OK
             } catch (e: Exception) {
