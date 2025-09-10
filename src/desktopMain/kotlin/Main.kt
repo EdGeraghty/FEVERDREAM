@@ -53,7 +53,13 @@ val json = Json {
 @Suppress("UNCHECKED_CAST")
 fun convertMapToHashMap(map: Any?): Any? {
     return when (map) {
-        is Map<*, *> -> map.mapValues { convertMapToHashMap(it.value) }.toMutableMap()
+        is Map<*, *> -> {
+            if (map.isEmpty()) {
+                mutableMapOf<String, Any>()
+            } else {
+                map.mapValues { convertMapToHashMap(it.value) }.toMutableMap()
+            }
+        }
         is List<*> -> map.map { convertMapToHashMap(it) }
         else -> map
     }
@@ -795,7 +801,7 @@ suspend fun sendMessage(roomId: String, message: String): Boolean {
                 val response = client.put("$currentHomeserver/_matrix/client/v3/rooms/$roomId/send/m.room.encrypted/${System.currentTimeMillis()}") {
                     bearerAuth(token)
                     contentType(ContentType.Application.Json)
-                    setBody(json.parseToJsonElement(encryptedContent))
+                    setBody(encryptedContent)
                 }
                 return response.status == HttpStatusCode.OK
             } catch (e: Exception) {
