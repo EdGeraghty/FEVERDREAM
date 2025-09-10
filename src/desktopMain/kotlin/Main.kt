@@ -468,13 +468,14 @@ suspend fun sendMessage(roomId: String, message: String): Boolean {
         val isEncrypted = isRoomEncrypted(roomId)
 
         if (isEncrypted) {
-            // For encrypted rooms, we need to encrypt the message
-            // This is a simplified implementation - in a real client, you'd use Olm/Megolm
+            // WARNING: This is FAKE encryption - just for demonstration
+            // Real Matrix encryption requires Olm/Megolm cryptographic libraries
+            println("⚠️  WARNING: Sending FAKE encrypted message (not actually encrypted)")
             val encryptedContent = EncryptedSendMessageRequest(
-                ciphertext = "encrypted_${message}", // Placeholder encryption
-                device_id = "DEVICE_ID", // Would be actual device ID
-                sender_key = "SENDER_KEY", // Would be actual sender key
-                session_id = "SESSION_ID" // Would be actual session ID
+                ciphertext = "encrypted_${message}", // FAKE encryption
+                device_id = "FAKE_DEVICE_ID", // Would be actual device ID
+                sender_key = "FAKE_SENDER_KEY", // Would be actual sender key
+                session_id = "FAKE_SESSION_ID" // Would be actual session ID
             )
 
             val response = client.put("$currentHomeserver/_matrix/client/v3/rooms/$roomId/send/m.room.encrypted/${System.currentTimeMillis()}") {
@@ -800,7 +801,7 @@ fun ChatWindow(roomId: String, onClose: () -> Unit) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text("Chat: $roomId", style = MaterialTheme.typography.h6)
                     if (isEncrypted) {
-                        Text("🔒 Encrypted Room (Basic encryption enabled)", style = MaterialTheme.typography.caption, color = MaterialTheme.colors.primary)
+                        Text("🔒 Encrypted Room (Placeholder - Real encryption requires Olm/Megolm libraries)", style = MaterialTheme.typography.caption, color = MaterialTheme.colors.error)
                     }
                 }
                 Button(onClick = onClose) {
@@ -884,9 +885,9 @@ fun MessageItem(message: Event) {
                 // Try to decrypt the message (placeholder for now)
                 val encryptedContent = json.decodeFromJsonElement<EncryptedMessageContent>(message.content)
                 // In a real implementation, you'd decrypt using Olm/Megolm
-                "🔓 [Decrypted: ${encryptedContent.ciphertext.replace("encrypted_", "")}]"
+                "🔓 [FAKE DECRYPTION: ${encryptedContent.ciphertext.replace("encrypted_", "")}]"
             } catch (e: Exception) {
-                "🔒 [Encrypted message - decryption not fully implemented]"
+                "🔒 [Encrypted message - NO REAL DECRYPTION IMPLEMENTED]"
             }
         }
         else -> "[${message.type}]"
