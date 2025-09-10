@@ -36,6 +36,17 @@ val json = Json {
     ignoreUnknownKeys = true
     encodeDefaults = true
     isLenient = true
+    serializersModule = SerializersModule {
+        // Register contextual serializer for Map to handle internal implementations like SingletonMap
+        contextual(Map::class) { args ->
+            if (args.size >= 2) {
+                MapSerializer(args[0], args[1])
+            } else {
+                // Fallback for unknown type arguments
+                MapSerializer(String.serializer(), JsonElement.serializer())
+            }
+        }
+    }
 }
 
 // Utility function to convert Maps to HashMap recursively to avoid serialization issues with SingletonMap
