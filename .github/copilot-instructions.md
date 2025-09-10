@@ -23,7 +23,7 @@
 	Skip this step for "Hello World" projects.
 	-->
 	Implemented Olm/Megolm encryption using jOlm library (currently the only available Kotlin option).
-	Note: jOlm is deprecated and superseded by vodozemac. Vodozemac Kotlin bindings are not yet available.
+	Note: jOlm is deprecated and superseded by vodozemac/matrix-sdk-crypto. Migration planned when Kotlin bindings become available.
 	Room encryption detection, Megolm group encryption for sending messages, and UI indicators for encrypted rooms implemented.
 	All compilation errors resolved and build successful.
 

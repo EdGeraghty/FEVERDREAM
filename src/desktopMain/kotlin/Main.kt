@@ -21,10 +21,13 @@ import io.ktor.serialization.kotlinx.json.*
 import kotlinx.coroutines.*
 import kotlinx.serialization.*
 import kotlinx.serialization.json.*
-import io.github.brevilo.jolm.*
 import java.security.SecureRandom
 import javax.net.ssl.SSLContext
 import javax.net.ssl.X509TrustManager
+import java.io.File
+import org.matrix.rustcomponents.sdk.crypto.*
+import uniffi.matrix_sdk_crypto.CollectStrategy
+import uniffi.matrix_sdk_crypto.DecryptionSettings
 
 val json = Json { 
     ignoreUnknownKeys = true
@@ -57,64 +60,38 @@ val client = HttpClient(Apache) {
 }
 
 // Global encryption state
-// NOTE: Currently using jOlm (deprecated, superseded by vodozemac)
-// TODO: Migrate to vodozemac when Kotlin bindings become available
-var olmAccount: Account? = null
-var olmSessions = mutableMapOf<String, Session>() // deviceId -> Session
-var outboundGroupSessions = mutableMapOf<String, OutboundGroupSession>() // roomId -> OutboundGroupSession
-var inboundGroupSessions = mutableMapOf<String, MutableMap<String, InboundGroupSession>>() // roomId -> sessionId -> InboundGroupSession
+// NOTE: Now using matrix-sdk-crypto (modern, vodozemac-based encryption)
+// Successfully migrated from deprecated jOlm library to current Matrix encryption standard
+var olmMachine: OlmMachine? = null
 
 // Global state for Matrix client
 var currentAccessToken: String? = null
 var currentHomeserver: String = "https://matrix.org"
 var currentDeviceId: String? = null
+var currentUserId: String? = null
 
 // Initialize Olm encryption
-fun initializeEncryption() {
-    if (olmAccount == null) {
+fun initializeEncryption(userId: String, deviceId: String) {
+    if (olmMachine == null) {
         try {
-            val account = Account()
-            olmAccount = account
-            val identityKeys = account.identityKeys()
-            println("🔑 Olm encryption initialized")
-            println("Curve25519 key: ${identityKeys.curve25519}")
-            println("Ed25519 key: ${identityKeys.ed25519}")
+            // Create crypto store directory
+            val cryptoStorePath = "crypto_store"
+            File(cryptoStorePath).mkdirs()
+
+            // Create OlmMachine with persistent storage
+            olmMachine = OlmMachine(userId, deviceId, cryptoStorePath, null)
+
+            val identityKeys = olmMachine!!.identityKeys()
+            println("🔑 Matrix SDK Crypto initialized")
+            println("Curve25519 key: ${identityKeys["curve25519"]}")
+            println("Ed25519 key: ${identityKeys["ed25519"]}")
         } catch (e: Exception) {
-            println("❌ Failed to initialize Olm encryption: ${e.message}")
+            println("❌ Failed to initialize Matrix SDK Crypto: ${e.message}")
         }
     }
 }
 
-// Get or create Olm session for a device
-fun getOlmSession(deviceId: String, oneTimeKey: String?): Session {
-    return olmSessions.getOrPut(deviceId) {
-        val account = olmAccount ?: throw Exception("Olm account not initialized")
-        try {
-            if (oneTimeKey != null) {
-                Session.createInboundSession(account, oneTimeKey)
-            } else {
-                // For demo purposes, create a dummy session if no one-time key
-                // In a real implementation, you'd need to get the one-time key from the device
-                throw Exception("One-time key required for Olm session")
-            }
-        } catch (e: Exception) {
-            println("❌ Failed to create Olm session: ${e.message}")
-            throw e
-        }
-    }
-}
 
-// Get or create outbound group session for a room
-fun getOutboundGroupSession(roomId: String): OutboundGroupSession {
-    return outboundGroupSessions.getOrPut(roomId) {
-        try {
-            OutboundGroupSession()
-        } catch (e: Exception) {
-            println("❌ Failed to create outbound group session: ${e.message}")
-            throw e
-        }
-    }
-}
 
 @Serializable
 data class LoginRequest(val type: String = "m.login.password", val user: String, val password: String)
@@ -159,7 +136,7 @@ data class Timeline(val events: List<Event> = emptyList())
 data class Event(val type: String, val event_id: String, val sender: String, val origin_server_ts: Long, val content: JsonElement)
 
 @Serializable
-data class MessageContent(val msgtype: String, val body: String)
+data class MessageContent(val msgtype: String = "m.text", val body: String)
 
 @Serializable
 data class EncryptedMessageContent(
@@ -371,9 +348,10 @@ suspend fun login(username: String, password: String, homeserver: String): Login
                 val loginResponse = response.body<LoginResponse>()
                 currentAccessToken = loginResponse.access_token
                 currentDeviceId = loginResponse.device_id
+                currentUserId = loginResponse.user_id
                 println("🔑 Logged in with device ID: ${currentDeviceId}")
                 // Initialize encryption system after successful login
-                initializeEncryption()
+                initializeEncryption(loginResponse.user_id, loginResponse.device_id)
                 return loginResponse
             } else {
                 // Try to get error details from response
@@ -398,8 +376,11 @@ suspend fun login(username: String, password: String, homeserver: String): Login
                             val loginResponse = oldResponse.body<LoginResponse>()
                             currentAccessToken = loginResponse.access_token
                             currentDeviceId = loginResponse.device_id
+                            currentUserId = loginResponse.user_id
                             println("🔑 Logged in with device ID: ${currentDeviceId}")
                             println("Login successful with older format")
+                            // Initialize encryption system after successful login
+                            initializeEncryption(loginResponse.user_id, loginResponse.device_id)
                             return loginResponse
                         } else {
                             println("Older login format also failed: ${oldResponse.status}")
@@ -441,7 +422,10 @@ suspend fun login(username: String, password: String, homeserver: String): Login
                     val loginResponse = fallbackResponse.body<LoginResponse>()
                     currentAccessToken = loginResponse.access_token
                     currentDeviceId = loginResponse.device_id
+                    currentUserId = loginResponse.user_id
                     println("🔑 Logged in with device ID: ${currentDeviceId}")
+                    // Initialize encryption system after successful login
+                    initializeEncryption(loginResponse.user_id, loginResponse.device_id)
                     return loginResponse
                 }
             }
@@ -532,24 +516,15 @@ suspend fun sendMessage(roomId: String, message: String): Boolean {
 
         if (isEncrypted) {
             try {
-                val account = olmAccount ?: throw Exception("Olm account not initialized")
-                val deviceId = currentDeviceId ?: "FEVERDREAM_DEVICE"
-                val identityKeys = account.identityKeys()
+                val machine = olmMachine ?: throw Exception("OlmMachine not initialized")
 
-                // Use Megolm for group encryption
-                val outboundSession = getOutboundGroupSession(roomId)
+                // Create the message content as JSON
+                val messageContent = json.encodeToString(MessageContent("m.text", message))
 
-                val encryptedText = outboundSession.encrypt(message)
+                // Use OlmMachine to encrypt - it handles Megolm session management internally
+                val encryptedContent = machine.encrypt(roomId, "m.room.message", messageContent)
 
-                val encryptedContent = mapOf(
-                    "algorithm" to "m.megolm.v1.aes-sha2",
-                    "ciphertext" to encryptedText,
-                    "sender_key" to identityKeys.curve25519,
-                    "device_id" to deviceId,
-                    "session_id" to outboundSession.sessionId()
-                )
-
-                println("🔐 Sending Megolm encrypted message to room $roomId")
+                println("🔐 Sending Matrix SDK Crypto encrypted message to room $roomId")
 
                 val response = client.put("$currentHomeserver/_matrix/client/v3/rooms/$roomId/send/m.room.encrypted/${System.currentTimeMillis()}") {
                     bearerAuth(token)
@@ -558,7 +533,7 @@ suspend fun sendMessage(roomId: String, message: String): Boolean {
                 }
                 return response.status == HttpStatusCode.OK
             } catch (e: Exception) {
-                println("❌ Encryption failed: ${e.message}")
+                println("❌ Matrix SDK Crypto encryption failed: ${e.message}")
                 return false
             }
         } else {
@@ -878,7 +853,7 @@ fun ChatWindow(roomId: String, onClose: () -> Unit) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text("Chat: $roomId", style = MaterialTheme.typography.h6)
                     if (isEncrypted) {
-                        Text("🔐 Encrypted Room (Olm/Megolm encryption active)", style = MaterialTheme.typography.caption, color = MaterialTheme.colors.primary)
+                        Text("🔐 Encrypted Room (Matrix SDK Crypto with vodozemac)", style = MaterialTheme.typography.caption, color = MaterialTheme.colors.primary)
                     }
                 }
                 Button(onClick = onClose) {

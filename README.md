@@ -20,7 +20,7 @@ This client implements Matrix end-to-end encryption using the Olm and Megolm cry
 - Implements Megolm group encryption for messages
 - Shows UI indicators for encrypted rooms
 
-**Note:** jOlm is deprecated and has been superseded by [vodozemac](https://github.com/matrix-org/vodozemac). However, official Kotlin bindings for vodozemac are not yet available. Migration to vodozemac will be implemented when Kotlin bindings become available.
+**Note:** jOlm is deprecated and has been superseded by [vodozemac](https://github.com/matrix-org/vodozemac). The project plans to migrate to [matrix-sdk-crypto](https://github.com/matrix-org/matrix-rust-sdk/tree/main/crates/matrix-sdk-crypto) (which uses vodozemac internally) once official Kotlin bindings become available. Current blocker: matrix-sdk-crypto-ffi requires MSVC build tools for Windows compilation.
 
 ## Getting Started
 

@@ -29,15 +29,17 @@ kotlin {
                 implementation("io.ktor:ktor-client-content-negotiation:2.3.0")
                 implementation("io.ktor:ktor-serialization-kotlinx-json:2.3.0")
 
-                // Note: jOlm is deprecated (superseded by vodozemac). 
-                // Vodozemac Kotlin bindings are not yet available.
-                // Consider migrating when official bindings become available.
+                // TODO: Replace with matrix-sdk-crypto when Kotlin bindings are available
+                // Current blocker: matrix-sdk-crypto-ffi requires MSVC build tools for Windows
+                // See: https://github.com/matrix-org/matrix-rust-sdk/tree/main/bindings/matrix-sdk-crypto-ffi
                 implementation("io.github.brevilo:jolm:1.1.1")
             }
         }
         val desktopMain by getting {
             dependencies {
                 implementation(compose.desktop.currentOs)
+                // JNA dependency for matrix-sdk-crypto-ffi
+                implementation("net.java.dev.jna:jna:5.13.0")
             }
         }
     }
