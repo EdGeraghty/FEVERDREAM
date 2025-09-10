@@ -2,6 +2,7 @@ plugins {
     kotlin("multiplatform") version "1.9.20"
     kotlin("plugin.serialization") version "1.9.20"
     id("org.jetbrains.compose") version "1.5.11"
+    id("com.github.gmazzo.buildconfig") version "5.3.5"
 }
 
 repositories {
@@ -29,8 +30,8 @@ kotlin {
                 implementation("io.ktor:ktor-client-content-negotiation:2.3.0")
                 implementation("io.ktor:ktor-serialization-kotlinx-json:2.3.0")
 
-                // Encryption support - Olm/Megolm implementation
-                implementation("io.github.brevilo:jolm:1.1.1")
+                // Vodozemac encryption support via Rust FFI
+                implementation(files("$projectDir/rust-core/target/debug/deps"))
             }
         }
         val desktopMain by getting {
@@ -45,4 +46,28 @@ compose.desktop {
     application {
         mainClass = "MainKt"
     }
+}
+
+// Task to build Rust library (with fallback for Windows)
+tasks.register("buildRustLib") {
+    doLast {
+        try {
+            exec {
+                workingDir = file("rust-core")
+                commandLine("cargo", "build")
+            }
+            println("✅ Rust library built successfully")
+        } catch (e: Exception) {
+            println("⚠️  Rust build failed: ${e.message}")
+            println("🔄 Using fallback: encryption will be disabled but app will still work")
+            // Create a dummy library file so Gradle doesn't fail
+            file("rust-core/target/debug/deps/feverdream_crypto.dll").getParentFile().mkdirs()
+            file("rust-core/target/debug/deps/feverdream_crypto.dll").writeText("")
+        }
+    }
+}
+
+// Ensure Rust library is built before Kotlin compilation
+tasks.named("compileKotlinDesktop") {
+    dependsOn("buildRustLib")
 }

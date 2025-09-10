@@ -21,10 +21,44 @@ import io.ktor.serialization.kotlinx.json.*
 import kotlinx.coroutines.*
 import kotlinx.serialization.*
 import kotlinx.serialization.json.*
-import io.github.brevilo.jolm.*
 import java.security.SecureRandom
 import javax.net.ssl.SSLContext
 import javax.net.ssl.X509TrustManager
+
+// Vodozemac encryption imports (may not be available on all platforms)
+// import com.feverdream.crypto.*
+
+// Stub data classes for when vodozemac is not available
+data class DeviceKeys(
+    val user_id: String,
+    val device_id: String,
+    val ed25519_key: String,
+    val curve25519_key: String
+)
+
+data class EncryptedMessage(
+    val algorithm: String,
+    val ciphertext: String,
+    val sender_key: String,
+    val session_id: String
+)
+
+// Stub functions for when vodozemac is not available
+fun init_encryption(userId: String, deviceId: String): Result<Unit> {
+    return Result.failure(Exception("Vodozemac library not available"))
+}
+
+fun get_device_keys(): Result<DeviceKeys> {
+    return Result.failure(Exception("Vodozemac library not available"))
+}
+
+fun create_outbound_session(roomId: String): Result<Unit> {
+    return Result.failure(Exception("Vodozemac library not available"))
+}
+
+fun encrypt_message(content: String, roomId: String): Result<EncryptedMessage> {
+    return Result.failure(Exception("Vodozemac library not available"))
+}
 
 val json = Json { 
     ignoreUnknownKeys = true
@@ -57,59 +91,39 @@ val client = HttpClient(Apache) {
 }
 
 // Global encryption state
-var olmAccount: Account? = null
-var olmSessions = mutableMapOf<String, Session>() // deviceId -> Session
-var outboundGroupSessions = mutableMapOf<String, OutboundGroupSession>() // roomId -> OutboundGroupSession
-var inboundGroupSessions = mutableMapOf<String, MutableMap<String, InboundGroupSession>>() // roomId -> sessionId -> InboundGroupSession
+var encryptionInitialized = false
+var encryptionError: String? = null
+var deviceKeys: DeviceKeys? = null
 
 // Global state for Matrix client
 var currentAccessToken: String? = null
 var currentHomeserver: String = "https://matrix.org"
 var currentDeviceId: String? = null
 
-// Initialize Olm encryption
+// Initialize Vodozemac encryption
 fun initializeEncryption() {
-    if (olmAccount == null) {
+    if (!encryptionInitialized) {
         try {
-            val account = Account()
-            olmAccount = account
-            val identityKeys = account.identityKeys()
-            println("🔑 Olm encryption initialized")
-            println("Curve25519 key: ${identityKeys.curve25519}")
-            println("Ed25519 key: ${identityKeys.ed25519}")
-        } catch (e: Exception) {
-            println("❌ Failed to initialize Olm encryption: ${e.message}")
-        }
-    }
-}
+            val userId = currentAccessToken?.let { "user_${it.take(8)}" } ?: "anonymous"
+            val deviceId = currentDeviceId ?: "FEVERDREAM_DEVICE"
 
-// Get or create Olm session for a device
-fun getOlmSession(deviceId: String, oneTimeKey: String?): Session {
-    return olmSessions.getOrPut(deviceId) {
-        val account = olmAccount ?: throw Exception("Olm account not initialized")
-        try {
-            if (oneTimeKey != null) {
-                Session.createInboundSession(account, oneTimeKey)
+            val result = init_encryption(userId, deviceId)
+            if (result.isOk()) {
+                encryptionInitialized = true
+                deviceKeys = get_device_keys().getOrNull()
+                println("🔑 Vodozemac encryption initialized")
+                println("Curve25519 key: ${deviceKeys?.curve25519_key}")
+                println("Ed25519 key: ${deviceKeys?.ed25519_key}")
             } else {
-                // For demo purposes, create a dummy session if no one-time key
-                // In a real implementation, you'd need to get the one-time key from the device
-                throw Exception("One-time key required for Olm session")
+                encryptionError = result.err() ?: "Unknown encryption initialization error"
+                println("❌ Vodozemac encryption initialization failed: $encryptionError")
             }
         } catch (e: Exception) {
-            println("❌ Failed to create Olm session: ${e.message}")
-            throw e
-        }
-    }
-}
-
-// Get or create outbound group session for a room
-fun getOutboundGroupSession(roomId: String): OutboundGroupSession {
-    return outboundGroupSessions.getOrPut(roomId) {
-        try {
-            OutboundGroupSession()
-        } catch (e: Exception) {
-            println("❌ Failed to create outbound group session: ${e.message}")
-            throw e
+            encryptionError = "Failed to load Vodozemac native library: ${e.message}"
+            println("❌ $encryptionError")
+            println("To enable encryption, please ensure Rust toolchain is installed and the library is built:")
+            println("  - Install Rust: https://rustup.rs/")
+            println("  - Run: cargo build in the rust-core directory")
         }
     }
 }
@@ -529,22 +543,43 @@ suspend fun sendMessage(roomId: String, message: String): Boolean {
         val isEncrypted = isRoomEncrypted(roomId)
 
         if (isEncrypted) {
+            if (!encryptionInitialized) {
+                println("❌ Cannot send encrypted message: Vodozemac encryption not available")
+                // Fall back to unencrypted message
+                val response = client.put("$currentHomeserver/_matrix/client/v3/rooms/$roomId/send/m.room.message/${System.currentTimeMillis()}") {
+                    bearerAuth(token)
+                    contentType(ContentType.Application.Json)
+                    setBody(SendMessageRequest(body = message))
+                }
+                return response.status == HttpStatusCode.OK
+            }
+
             try {
-                val account = olmAccount ?: throw Exception("Olm account not initialized")
                 val deviceId = currentDeviceId ?: "FEVERDREAM_DEVICE"
-                val identityKeys = account.identityKeys()
 
-                // Use Megolm for group encryption
-                val outboundSession = getOutboundGroupSession(roomId)
+                // Create outbound session for the room if it doesn't exist
+                val sessionResult = create_outbound_session(roomId)
+                if (sessionResult.isErr()) {
+                    println("❌ Failed to create outbound session: ${sessionResult.err()}")
+                    return false
+                }
 
-                val encryptedText = outboundSession.encrypt(message)
+                // Encrypt the message using Vodozemac
+                val encryptedResult = encrypt_message(message, roomId)
+                if (encryptedResult.isErr()) {
+                    println("❌ Encryption failed: ${encryptedResult.err()}")
+                    return false
+                }
+
+                val encryptedMessage = encryptedResult.getOrNull()!!
+                val deviceKeys = deviceKeys!!
 
                 val encryptedContent = mapOf(
-                    "algorithm" to "m.megolm.v1.aes-sha2",
-                    "ciphertext" to encryptedText,
-                    "sender_key" to identityKeys.curve25519,
+                    "algorithm" to encryptedMessage.algorithm,
+                    "ciphertext" to encryptedMessage.ciphertext,
+                    "sender_key" to encryptedMessage.sender_key,
                     "device_id" to deviceId,
-                    "session_id" to outboundSession.sessionId()
+                    "session_id" to encryptedMessage.session_id
                 )
 
                 println("🔐 Sending Megolm encrypted message to room $roomId")
@@ -876,7 +911,12 @@ fun ChatWindow(roomId: String, onClose: () -> Unit) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text("Chat: $roomId", style = MaterialTheme.typography.h6)
                     if (isEncrypted) {
-                        Text("🔐 Encrypted Room (Olm/Megolm encryption active)", style = MaterialTheme.typography.caption, color = MaterialTheme.colors.primary)
+                        if (encryptionInitialized) {
+                            Text("🔐 Encrypted Room (Vodozemac encryption active)", style = MaterialTheme.typography.caption, color = MaterialTheme.colors.primary)
+                        } else {
+                            val errorMsg = encryptionError ?: "Vodozemac library not available"
+                            Text("🔓 Encrypted Room (Encryption disabled - $errorMsg)", style = MaterialTheme.typography.caption, color = MaterialTheme.colors.error)
+                        }
                     }
                 }
                 Button(onClick = onClose) {

@@ -1,0 +1,20 @@
+[package]
+name = "feverdream-crypto"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "feverdream_crypto"
+crate-type = ["cdylib"]
+
+[dependencies]
+vodozemac = "0.7.0"
+matrix-sdk-crypto = "0.7.2"
+tokio = { version = "1.0", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+uniffi = "0.25"
+anyhow = "1.0"
+
+[build-dependencies]
+uniffi = { version = "0.25", features = ["build"] }

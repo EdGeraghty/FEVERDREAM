@@ -1,0 +1,8 @@
+[build]
+libraryName = "feverdream_crypto"
+kotlin.multiplatform = true
+kotlin.targets = ["jvm"]
+
+[bindings.kotlin]
+package_name = "com.feverdream.crypto"
+cdylib_name = "feverdream_crypto"
