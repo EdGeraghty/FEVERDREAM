@@ -4,6 +4,12 @@ plugins {
     id("org.jetbrains.compose") version "1.5.11"
 }
 
+repositories {
+    mavenCentral()
+    maven { url = uri("https://oss.sonatype.org/content/repositories/snapshots") }
+    maven { url = uri("https://jitpack.io") }
+}
+
 kotlin {
     jvm("desktop") {
         jvmToolchain(17)
@@ -25,7 +31,6 @@ kotlin {
         val desktopMain by getting {
             dependencies {
                 implementation(compose.desktop.currentOs)
-                implementation("org.matrix.android:matrix-android-sdk2:1.6.0")
             }
         }
     }
