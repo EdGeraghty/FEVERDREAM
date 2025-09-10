@@ -73,11 +73,11 @@ var currentUserId: String? = null
 // Initialize Olm encryption
 fun initializeEncryption(userId: String, deviceId: String) {
     if (olmMachine == null) {
-        try {
-            // Create crypto store directory
-            val cryptoStorePath = "crypto_store"
-            File(cryptoStorePath).mkdirs()
+        // Create crypto store directory
+        val cryptoStorePath = "crypto_store"
+        File(cryptoStorePath).mkdirs()
 
+        try {
             // Create OlmMachine with persistent storage
             olmMachine = OlmMachine(userId, deviceId, cryptoStorePath, null)
 
@@ -87,6 +87,25 @@ fun initializeEncryption(userId: String, deviceId: String) {
             println("Ed25519 key: ${identityKeys["ed25519"]}")
         } catch (e: Exception) {
             println("❌ Failed to initialize Matrix SDK Crypto: ${e.message}")
+
+            // If the error is about account mismatch, clear the crypto store and retry
+            if (e.message?.contains("account in the store doesn't match") == true) {
+                println("🔄 Clearing crypto store due to account mismatch...")
+                try {
+                    File(cryptoStorePath).deleteRecursively()
+                    File(cryptoStorePath).mkdirs()
+
+                    // Retry initialization with clean store
+                    olmMachine = OlmMachine(userId, deviceId, cryptoStorePath, null)
+
+                    val identityKeys = olmMachine!!.identityKeys()
+                    println("🔑 Matrix SDK Crypto initialized after clearing store")
+                    println("Curve25519 key: ${identityKeys["curve25519"]}")
+                    println("Ed25519 key: ${identityKeys["ed25519"]}")
+                } catch (retryException: Exception) {
+                    println("❌ Failed to initialize Matrix SDK Crypto after clearing store: ${retryException.message}")
+                }
+            }
         }
     }
 }
