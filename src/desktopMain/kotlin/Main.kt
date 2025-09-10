@@ -415,7 +415,7 @@ data class SendMessageRequest(val msgtype: String = "m.text", val body: String)
 
 @Serializable
 data class EncryptedSendMessageRequest(
-    val algorithm: String = "m.megolm.v1.aes-sha2",
+    val algorithm: String = "m.custom.feverdream.v1",
     val ciphertext: String,
     val device_id: String,
     val sender_key: String,
@@ -1066,15 +1066,22 @@ fun MessageItem(message: Event) {
             try {
                 val encryptedContent = json.decodeFromJsonElement<EncryptedMessageContent>(message.content)
 
-                // Use the device_id from the encrypted message for decryption
-                val deviceId = encryptedContent.device_id ?: currentDeviceId ?: "FEVERDREAM_DEVICE"
-                val decryptedText = decryptMessageCustom(encryptedContent.ciphertext, deviceId)
-
-                if (decryptedText != null) {
-                    "🔓 [Custom Decrypted: $decryptedText]"
-                } else {
-                    "� [Olm decryption failed - unable to decrypt message]"
+                when (encryptedContent.algorithm) {
+                    "m.custom.feverdream.v1" -> {
+                        // Use the device_id from the encrypted message for decryption
+                        val deviceId = encryptedContent.device_id ?: currentDeviceId ?: "FEVERDREAM_DEVICE"
+                        val decryptedText = decryptMessageCustom(encryptedContent.ciphertext, deviceId)
+                        if (decryptedText != null) {
+                            "🔓 [Custom Decrypted: $decryptedText]"
+                        } else {
+                            "� [Olm decryption failed - unable to decrypt message]"
+                        }
+                    }
+                    else -> {
+                        "🔒 [Unsupported encryption algorithm: ${encryptedContent.algorithm}]"
+                    }
                 }
+
             } catch (e: Exception) {
                 "🔒 [Encrypted message - Custom decryption error: ${e.message}]"
             }
