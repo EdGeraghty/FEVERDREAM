@@ -674,7 +674,7 @@ suspend fun syncAndProcessToDevice(): Boolean {
         println("🔄 Starting sync to process to-device events...")
         val response = client.get("$currentHomeserver/_matrix/client/v3/sync") {
             bearerAuth(token)
-            parameter("timeout", "10000") // 10 second timeout for faster response
+            parameter("timeout", "30000") // 30 second timeout for better responsiveness
             parameter("filter", """{"room":{"timeline":{"limit":10},"state":{"limit":0},"ephemeral":{"limit":0}},"presence":{"limit":0},"account_data":{"limit":0},"receipts":{"limit":0}}""")
             // Use since token if we have one
             if (currentSyncToken.isNotBlank()) {
@@ -714,7 +714,7 @@ suspend fun syncAndProcessToDevice(): Boolean {
                 val decryptionSettings = DecryptionSettings(senderDeviceTrustRequirement = TrustRequirement.UNTRUSTED)
                 val syncChanges = machine.receiveSyncChanges(
                     events = toDeviceEventJsons.joinToString(",", "[", "]"), // Array format
-                    deviceChanges = DeviceLists(emptyList(), emptyList()), // Empty device lists
+                    deviceChanges = org.matrix.rustcomponents.sdk.crypto.DeviceLists(emptyList(), emptyList()), // Empty device lists
                     keyCounts = emptyMap<String, Int>(), // Empty key counts map
                     unusedFallbackKeys = null,
                     nextBatchToken = syncResponse.nextBatch ?: "",
@@ -769,6 +769,25 @@ suspend fun syncAndProcessToDevice(): Boolean {
                                     println("✅ Outgoing keys query sent")
                                 } else {
                                     println("❌ Failed to send outgoing keys query: ${keysQueryResponse.status}")
+                                }
+                            }
+                            is Request.KeysUpload -> {
+                                val keysUploadResponse = client.post("$currentHomeserver/_matrix/client/v3/keys/upload") {
+                                    bearerAuth(token)
+                                    contentType(ContentType.Application.Json)
+                                    val body = convertMapToHashMap(request.body)
+                                    if (body is Map<*, *>) {
+                                        @Suppress("UNCHECKED_CAST")
+                                        val mapBody = body as Map<String, Any>
+                                        setBody(JsonObject(mapBody.mapValues { anyToJsonElement(it.value) }))
+                                    } else if (body is String) {
+                                        setBody(json.parseToJsonElement(body))
+                                    }
+                                }
+                                if (keysUploadResponse.status == HttpStatusCode.OK) {
+                                    println("✅ Keys uploaded successfully")
+                                } else {
+                                    println("❌ Failed to upload keys: ${keysUploadResponse.status}")
                                 }
                             }
                             else -> {
@@ -982,7 +1001,9 @@ suspend fun sendMessage(roomId: String, message: String): Boolean {
                                         setBody(json.parseToJsonElement(body))
                                     }
                                 }
-                                if (keysUploadResponse.status != HttpStatusCode.OK) {
+                                if (keysUploadResponse.status == HttpStatusCode.OK) {
+                                    println("✅ Keys uploaded successfully")
+                                } else {
                                     println("❌ Failed to upload keys: ${keysUploadResponse.status}")
                                 }
                             }
@@ -1076,6 +1097,25 @@ suspend fun sendMessage(roomId: String, message: String): Boolean {
                                     println("❌ Failed to send remaining request: ${remainingToDeviceResponse.status}")
                                 }
                             }
+                            is Request.KeysUpload -> {
+                                val remainingKeysUploadResponse = client.post("$currentHomeserver/_matrix/client/v3/keys/upload") {
+                                    bearerAuth(token)
+                                    contentType(ContentType.Application.Json)
+                                    val body = convertMapToHashMap(request.body)
+                                    if (body is Map<*, *>) {
+                                        @Suppress("UNCHECKED_CAST")
+                                        val mapBody = body as Map<String, Any>
+                                        setBody(JsonObject(mapBody.mapValues { anyToJsonElement(it.value) }))
+                                    } else if (body is String) {
+                                        setBody(json.parseToJsonElement(body))
+                                    }
+                                }
+                                if (remainingKeysUploadResponse.status == HttpStatusCode.OK) {
+                                    println("✅ Keys uploaded successfully")
+                                } else {
+                                    println("❌ Failed to upload keys: ${remainingKeysUploadResponse.status}")
+                                }
+                            }
                             is Request.KeysQuery -> {
                                 val remainingKeysQueryResponse = client.post("$currentHomeserver/_matrix/client/v3/keys/query") {
                                     bearerAuth(token)
@@ -1141,6 +1181,25 @@ suspend fun sendMessage(roomId: String, message: String): Boolean {
                                     }
                                     if (encryptToDeviceResponse.status != HttpStatusCode.OK) {
                                         println("❌ Failed to send encrypt request: ${encryptToDeviceResponse.status}")
+                                    }
+                                }
+                                is Request.KeysUpload -> {
+                                    val encryptKeysUploadResponse = client.post("$currentHomeserver/_matrix/client/v3/keys/upload") {
+                                        bearerAuth(token)
+                                        contentType(ContentType.Application.Json)
+                                        val body = convertMapToHashMap(request.body)
+                                        if (body is Map<*, *>) {
+                                            @Suppress("UNCHECKED_CAST")
+                                            val mapBody = body as Map<String, Any>
+                                            setBody(JsonObject(mapBody.mapValues { anyToJsonElement(it.value) }))
+                                        } else if (body is String) {
+                                            setBody(json.parseToJsonElement(body))
+                                        }
+                                    }
+                                    if (encryptKeysUploadResponse.status == HttpStatusCode.OK) {
+                                        println("✅ Keys uploaded successfully")
+                                    } else {
+                                        println("❌ Failed to upload keys: ${encryptKeysUploadResponse.status}")
                                     }
                                 }
                                 is Request.KeysQuery -> {
