@@ -70,31 +70,45 @@ suspend fun login(username: String, password: String, homeserver: String): Strin
         // Clean username - remove @ if present
         val cleanUsername = username.removePrefix("@")
 
-        // First, check what login flows are supported
-        val supportedFlows = getLoginFlows(cleanHomeserver)
-        println("Server supports login flows: $supportedFlows")
-
-        if (!supportedFlows.contains("m.login.password")) {
-            throw Exception("Server does not support password login. Supported flows: $supportedFlows")
+        // Parse username to separate user and server parts
+        val (userPart, userServerPart) = if (cleanUsername.contains(":")) {
+            val parts = cleanUsername.split(":", limit = 2)
+            parts[0] to parts[1]
+        } else {
+            cleanUsername to null
         }
 
+        val serverDomain = cleanHomeserver.removePrefix("https://").removePrefix("http://")
+        println("Parsed username: user='$userPart', userServer='${userServerPart ?: "none"}', homeserverDomain='$serverDomain'")
+
         // Try different login formats
-        val loginAttempts = listOf(
-            // Format 1: Simple user field
-            LoginRequest(user = cleanUsername, password = password),
-            // Format 2: With identifier object
-            LoginRequestV2(identifier = Identifier(user = cleanUsername), password = password),
+        val loginAttempts = mutableListOf<Any>()
+
+        // Format 1: Simple user field (just the localpart)
+        loginAttempts.add(LoginRequest(user = userPart, password = password))
+
+        // Format 2: With identifier object (just the localpart)
+        loginAttempts.add(LoginRequestV2(identifier = Identifier(user = userPart), password = password))
+
+        // Only add server-specific formats if the username didn't already include a server
+        if (userServerPart == null) {
             // Format 3: Full user ID with server
-            LoginRequest(user = "$cleanUsername:${cleanHomeserver.removePrefix("https://")}", password = password),
+            loginAttempts.add(LoginRequest(user = "$userPart:$serverDomain", password = password))
+
             // Format 4: Full user ID with identifier
-            LoginRequestV2(identifier = Identifier(user = "$cleanUsername:${cleanHomeserver.removePrefix("https://")}"), password = password),
-            // Format 5: Very basic map format (some servers might expect this)
-            mapOf(
-                "type" to "m.login.password",
-                "user" to cleanUsername,
-                "password" to password
-            )
-        )
+            loginAttempts.add(LoginRequestV2(identifier = Identifier(user = "$userPart:$serverDomain"), password = password))
+        } else {
+            // If username already has server, use it as-is
+            loginAttempts.add(LoginRequest(user = cleanUsername, password = password))
+            loginAttempts.add(LoginRequestV2(identifier = Identifier(user = cleanUsername), password = password))
+        }
+
+        // Format 5: Very basic map format
+        loginAttempts.add(mapOf(
+            "type" to "m.login.password",
+            "user" to userPart,
+            "password" to password
+        ))
 
         for ((index, loginRequest) in loginAttempts.withIndex()) {
             println("Attempting login format ${index + 1}: $loginRequest")
@@ -113,12 +127,16 @@ suspend fun login(username: String, password: String, homeserver: String): Strin
                 } else if (response.status == HttpStatusCode.Unauthorized) {
                     // Wrong credentials, don't try other formats
                     throw Exception("Invalid username or password")
+                } else if (response.status == HttpStatusCode.Forbidden) {
+                    // Account might be deactivated or other auth issue
+                    throw Exception("Login forbidden - check your account status")
                 }
                 // Continue to next format for other errors
 
             } catch (e: Exception) {
                 println("Login format ${index + 1} failed: ${e.message}")
-                if (e.message?.contains("Invalid username or password") == true) {
+                if (e.message?.contains("Invalid username or password") == true ||
+                    e.message?.contains("Login forbidden") == true) {
                     throw e // Don't continue if credentials are wrong
                 }
                 // Continue to next format
