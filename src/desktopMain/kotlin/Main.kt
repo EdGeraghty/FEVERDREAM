@@ -34,6 +34,7 @@ import javax.crypto.KeyAgreement
 import javax.crypto.SecretKey
 import javax.crypto.spec.SecretKeySpec
 import javax.crypto.Cipher
+import javax.crypto.spec.GCMParameterSpec
 import java.security.MessageDigest
 import java.security.SecureRandom
 import javax.net.ssl.SSLContext
@@ -131,19 +132,24 @@ fun getSessionKey(deviceId: String): SecretKey? {
 }
 
 // Encrypt message using custom Olm-like protocol
-@Suppress("DEPRECATION")
 fun encryptMessageCustom(message: String, deviceId: String): String? {
     return try {
-        // Use Tink Aead with AES256_GCM template
-        val keysetHandle = KeysetHandle.generateNew(
-            AeadKeyTemplates.AES256_GCM
-        )
-        val aead = keysetHandle.getPrimitive(Aead::class.java)
+        // Use deterministic key derivation for consistent encryption/decryption
+        val derivedKey = deriveKeyFromDeviceId(deviceId)
+
+        // Use standard Java crypto with the derived key
+        val secretKey = SecretKeySpec(derivedKey, "AES")
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(Cipher.ENCRYPT_MODE, secretKey)
 
         val plaintext = message.toByteArray(Charsets.UTF_8)
-        val ciphertext = aead.encrypt(plaintext, deviceId.toByteArray(Charsets.UTF_8))
+        val ciphertext = cipher.doFinal(plaintext)
 
-        java.util.Base64.getEncoder().encodeToString(ciphertext)
+        // Combine IV and ciphertext for decryption
+        val iv = cipher.iv
+        val combined = iv + ciphertext
+
+        java.util.Base64.getEncoder().encodeToString(combined)
     } catch (e: Exception) {
         println("❌ Custom encryption failed: ${e.message}")
         null
@@ -151,23 +157,40 @@ fun encryptMessageCustom(message: String, deviceId: String): String? {
 }
 
 // Decrypt message using custom Olm-like protocol
-@Suppress("DEPRECATION")
 fun decryptMessageCustom(encryptedMessage: String, deviceId: String): String? {
     return try {
-        // Use Tink Aead with AES256_GCM template
-        val keysetHandle = KeysetHandle.generateNew(
-            AeadKeyTemplates.AES256_GCM
-        )
-        val aead = keysetHandle.getPrimitive(Aead::class.java)
+        // Use the same deterministic key derivation for decryption
+        val derivedKey = deriveKeyFromDeviceId(deviceId)
 
-        val ciphertext = java.util.Base64.getDecoder().decode(encryptedMessage)
-        val plaintext = aead.decrypt(ciphertext, deviceId.toByteArray(Charsets.UTF_8))
+        // Decode the combined IV + ciphertext
+        val combined = java.util.Base64.getDecoder().decode(encryptedMessage)
 
+        // Extract IV (first 12 bytes for GCM) and ciphertext
+        val iv = combined.copyOfRange(0, 12)
+        val ciphertext = combined.copyOfRange(12, combined.size)
+
+        // Use standard Java crypto with the derived key
+        val secretKey = SecretKeySpec(derivedKey, "AES")
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        val gcmParameterSpec = javax.crypto.spec.GCMParameterSpec(128, iv)
+        cipher.init(Cipher.DECRYPT_MODE, secretKey, gcmParameterSpec)
+
+        val plaintext = cipher.doFinal(ciphertext)
         String(plaintext, Charsets.UTF_8)
     } catch (e: Exception) {
         println("❌ Custom decryption failed: ${e.message}")
         null
     }
+}
+
+// Derive a consistent key from device ID for demo purposes
+fun deriveKeyFromDeviceId(deviceId: String): ByteArray {
+    // Use a simple key derivation: hash the device ID with a fixed salt
+    // In a real implementation, this would use proper key exchange
+    val combined = (deviceId + "FEVERDREAM_SALT").toByteArray(Charsets.UTF_8)
+    val digest = MessageDigest.getInstance("SHA-256")
+    val hash = digest.digest(combined)
+    return hash.copyOf(32) // AES-256 needs 32 bytes
 }
 
 @Serializable
@@ -580,14 +603,14 @@ suspend fun sendMessage(roomId: String, message: String): Boolean {
 
         if (isEncrypted) {
             try {
-                // Use custom Olm-like encryption
-                val deviceId = currentAccessToken?.take(16) ?: "unknown_device"
+                // Use custom Olm-like encryption with consistent device ID
+                val deviceId = "FEVERDREAM_DEVICE" // Fixed device ID for this session
                 val encryptedText = encryptMessageCustom(message, deviceId)
 
                 if (encryptedText != null) {
                     val encryptedContent = EncryptedSendMessageRequest(
                         ciphertext = encryptedText,
-                        device_id = "FEVERDREAM_${System.currentTimeMillis()}",
+                        device_id = deviceId,
                         sender_key = java.util.Base64.getEncoder().encodeToString(identityKeyPair?.public?.encoded ?: byteArrayOf()),
                         session_id = deviceId
                     )
@@ -1008,9 +1031,9 @@ fun MessageItem(message: Event) {
             try {
                 val encryptedContent = json.decodeFromJsonElement<EncryptedMessageContent>(message.content)
 
-                // Try to decrypt using custom Olm-like encryption
-                val deviceKey = encryptedContent.sender_key ?: "unknown_device"
-                val decryptedText = decryptMessageCustom(encryptedContent.ciphertext, deviceKey)
+                // Use the same consistent device ID for decryption
+                val deviceId = "FEVERDREAM_DEVICE" // Same device ID used for encryption
+                val decryptedText = decryptMessageCustom(encryptedContent.ciphertext, deviceId)
 
                 if (decryptedText != null) {
                     "🔓 [Custom Decrypted: $decryptedText]"
