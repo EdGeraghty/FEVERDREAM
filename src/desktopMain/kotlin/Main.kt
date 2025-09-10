@@ -26,12 +26,14 @@ import javax.net.ssl.X509TrustManager
 
 import io.ktor.client.engine.apache.*
 
+val json = Json { 
+    ignoreUnknownKeys = true
+    encodeDefaults = true
+}
+
 val client = HttpClient(Apache) {
     install(ContentNegotiation) {
-        json(Json { 
-            ignoreUnknownKeys = true
-            encodeDefaults = true
-        })
+        json(json)
     }
     engine {
         // Configure Apache HttpClient for better TLS support
@@ -147,7 +149,7 @@ suspend fun discoverHomeserver(domain: String): String {
             println("Client well-known response body: $clientResponseText")
 
             try {
-                val clientWellKnown = Json.decodeFromString<ClientWellKnownResponse>(clientResponseText)
+                val clientWellKnown = json.decodeFromString<ClientWellKnownResponse>(clientResponseText)
                 val homeserverInfo = clientWellKnown.homeserver
 
                 if (homeserverInfo != null) {
@@ -185,7 +187,7 @@ suspend fun discoverHomeserver(domain: String): String {
                 println("Server delegation response body: $serverResponseText")
 
                 try {
-                    val delegation = Json.decodeFromString<ServerDelegationResponse>(serverResponseText)
+                    val delegation = json.decodeFromString<ServerDelegationResponse>(serverResponseText)
                     val serverValue = delegation.mServer
 
                     if (serverValue != null) {
@@ -301,7 +303,7 @@ suspend fun login(username: String, password: String, homeserver: String): Login
                 password = password
             )
 
-            println("Sending login request: ${Json.encodeToString(loginRequest)}")
+            println("Sending login request: ${json.encodeToString(loginRequest)}")
 
             val response = client.post("$finalHomeserver/_matrix/client/v3/login") {
                 contentType(ContentType.Application.Json)
@@ -671,7 +673,7 @@ fun ChatScreen(loginResponse: LoginResponse) {
                             val roomName = invite.state.events.firstOrNull()?.let { event ->
                                 if (event.type == "m.room.name") {
                                     try {
-                                        Json.decodeFromJsonElement<Map<String, String>>(event.content)["name"] ?: invite.room_id
+                                        json.decodeFromJsonElement<Map<String, String>>(event.content)["name"] ?: invite.room_id
                                     } catch (e: Exception) {
                                         invite.room_id
                                     }
@@ -871,7 +873,7 @@ fun MessageItem(message: Event) {
     val displayText = when (message.type) {
         "m.room.message" -> {
             try {
-                val content = Json.decodeFromJsonElement<MessageContent>(message.content)
+                val content = json.decodeFromJsonElement<MessageContent>(message.content)
                 content.body
             } catch (e: Exception) {
                 "[Unable to parse message]"
@@ -880,7 +882,7 @@ fun MessageItem(message: Event) {
         "m.room.encrypted" -> {
             try {
                 // Try to decrypt the message (placeholder for now)
-                val encryptedContent = Json.decodeFromJsonElement<EncryptedMessageContent>(message.content)
+                val encryptedContent = json.decodeFromJsonElement<EncryptedMessageContent>(message.content)
                 // In a real implementation, you'd decrypt using Olm/Megolm
                 "🔓 [Decrypted: ${encryptedContent.ciphertext.replace("encrypted_", "")}]"
             } catch (e: Exception) {
