@@ -56,6 +56,27 @@ data class LoginFlow(val type: String)
 @Serializable
 data class JoinedRoomsResponse(val joined_rooms: List<String>)
 
+@Serializable
+data class RoomInvite(val room_id: String, val sender: String, val state: RoomState)
+
+@Serializable
+data class RoomState(val events: List<StateEvent>)
+
+@Serializable
+data class StateEvent(val type: String, val state_key: String, val sender: String, val content: RoomNameContent)
+
+@Serializable
+data class RoomNameContent(val name: String? = null)
+
+@Serializable
+data class SyncResponse(val rooms: Rooms? = null)
+
+@Serializable
+data class Rooms(val invite: Map<String, InvitedRoom>? = null)
+
+@Serializable
+data class InvitedRoom(val invite_state: RoomState? = null)
+
 suspend fun login(username: String, password: String, homeserver: String): String? {
     try {
         // Ensure homeserver has https
@@ -164,6 +185,59 @@ suspend fun getJoinedRooms(homeserver: String, accessToken: String): List<String
         println("Get rooms failed: ${e.message}")
     }
     return emptyList()
+}
+
+suspend fun getRoomInvites(homeserver: String, accessToken: String): List<RoomInvite> {
+    try {
+        // Use sync endpoint to get invited rooms
+        val response = client.get("$homeserver/_matrix/client/v3/sync") {
+            bearerAuth(accessToken)
+            parameter("filter", """{"room":{"state":{"lazy_load_members":true},"timeline":{"lazy_load_members":true},"ephemeral":{"lazy_load_members":true}}}""")
+            parameter("timeout", "0")
+        }
+        if (response.status == HttpStatusCode.OK) {
+            val syncResponse = response.body<SyncResponse>()
+            val invitedRooms = mutableListOf<RoomInvite>()
+
+            syncResponse.rooms?.invite?.forEach { (roomId, inviteState) ->
+                val sender = inviteState.invite_state?.events?.firstOrNull()?.sender ?: "Unknown"
+                invitedRooms.add(RoomInvite(roomId, sender, inviteState.invite_state ?: RoomState(emptyList())))
+            }
+
+            return invitedRooms
+        }
+    } catch (e: Exception) {
+        println("Get invites failed: ${e.message}")
+    }
+    return emptyList()
+}
+
+suspend fun acceptRoomInvite(homeserver: String, accessToken: String, roomId: String): Boolean {
+    try {
+        val response = client.post("$homeserver/_matrix/client/v3/rooms/$roomId/join") {
+            bearerAuth(accessToken)
+            contentType(ContentType.Application.Json)
+            setBody(mapOf<String, String>())
+        }
+        return response.status == HttpStatusCode.OK
+    } catch (e: Exception) {
+        println("Accept invite failed: ${e.message}")
+    }
+    return false
+}
+
+suspend fun rejectRoomInvite(homeserver: String, accessToken: String, roomId: String): Boolean {
+    try {
+        val response = client.post("$homeserver/_matrix/client/v3/rooms/$roomId/leave") {
+            bearerAuth(accessToken)
+            contentType(ContentType.Application.Json)
+            setBody(mapOf<String, String>())
+        }
+        return response.status == HttpStatusCode.OK
+    } catch (e: Exception) {
+        println("Reject invite failed: ${e.message}")
+    }
+    return false
 }
 
 suspend fun getLoginFlows(homeserver: String): List<String> {
@@ -294,19 +368,98 @@ fun LoginScreen(onLogin: (String, String, String) -> Unit, error: String?, isLoa
 @Composable
 fun ChatScreen(accessToken: String, homeserver: String) {
     var rooms by remember { mutableStateOf(listOf<String>()) }
+    var invites by remember { mutableStateOf(listOf<RoomInvite>()) }
+    var isLoading by remember { mutableStateOf(true) }
     val scope = rememberCoroutineScope()
 
     LaunchedEffect(accessToken) {
+        isLoading = true
         scope.launch {
             rooms = getJoinedRooms(homeserver, accessToken)
+            invites = getRoomInvites(homeserver, accessToken)
+            isLoading = false
         }
     }
 
-    Column {
-        Text("Joined Rooms:")
-        rooms.forEach { roomId ->
-            Button(onClick = { /* TODO: Open chat window for room */ }) {
-                Text(roomId)
+    Column(modifier = Modifier.padding(16.dp)) {
+        Text("FEVERDREAM", style = MaterialTheme.typography.h5)
+        Spacer(modifier = Modifier.height(16.dp))
+
+        if (isLoading) {
+            CircularProgressIndicator()
+            Text("Loading rooms and invites...")
+        } else {
+            // Show pending invites
+            if (invites.isNotEmpty()) {
+                Text("Pending Invites:", style = MaterialTheme.typography.h6)
+                Spacer(modifier = Modifier.height(8.dp))
+
+                invites.forEach { invite ->
+                    Card(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                        Column(modifier = Modifier.padding(16.dp)) {
+                            val roomName = invite.state.events.firstOrNull()?.content?.name ?: invite.room_id
+                            Text("Room: $roomName", style = MaterialTheme.typography.body1)
+                            Text("Invited by: ${invite.sender}", style = MaterialTheme.typography.body2)
+
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Row {
+                                Button(
+                                    onClick = {
+                                        scope.launch {
+                                            if (acceptRoomInvite(homeserver, accessToken, invite.room_id)) {
+                                                // Refresh data after accepting
+                                                rooms = getJoinedRooms(homeserver, accessToken)
+                                                invites = getRoomInvites(homeserver, accessToken)
+                                            }
+                                        }
+                                    },
+                                    modifier = Modifier.weight(1f).padding(end = 4.dp)
+                                ) {
+                                    Text("Accept")
+                                }
+
+                                Button(
+                                    onClick = {
+                                        scope.launch {
+                                            if (rejectRoomInvite(homeserver, accessToken, invite.room_id)) {
+                                                // Refresh invites after rejecting
+                                                invites = getRoomInvites(homeserver, accessToken)
+                                            }
+                                        }
+                                    },
+                                    modifier = Modifier.weight(1f).padding(start = 4.dp),
+                                    colors = ButtonDefaults.buttonColors(backgroundColor = MaterialTheme.colors.error)
+                                ) {
+                                    Text("Reject")
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+            }
+
+            // Show joined rooms
+            Text("Joined Rooms:", style = MaterialTheme.typography.h6)
+            Spacer(modifier = Modifier.height(8.dp))
+
+            if (rooms.isEmpty()) {
+                Text("No joined rooms yet.")
+            } else {
+                rooms.forEach { roomId ->
+                    Card(modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
+                        Row(
+                            modifier = Modifier.padding(16.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(roomId, modifier = Modifier.weight(1f))
+                            Button(onClick = { /* TODO: Open chat for this room */ }) {
+                                Text("Open")
+                            }
+                        }
+                    }
+                }
             }
         }
     }
