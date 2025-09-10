@@ -39,6 +39,12 @@ val client = HttpClient(CIO) {
 data class LoginRequest(val type: String = "m.login.password", val user: String, val password: String)
 
 @Serializable
+data class LoginRequestV2(val type: String = "m.login.password", val identifier: Identifier, val password: String)
+
+@Serializable
+data class Identifier(val type: String = "m.id.user", val user: String)
+
+@Serializable
 data class LoginResponse(val access_token: String)
 
 @Serializable
@@ -58,44 +64,52 @@ suspend fun login(username: String, password: String, homeserver: String): Strin
         // Clean username - remove @ if present
         val cleanUsername = username.removePrefix("@")
 
-        // Try different user ID formats
-        val userId = if (cleanUsername.contains(":")) {
-            cleanUsername
-        } else {
-            // For matrix.org and similar, try both formats
-            cleanUsername // Let the server handle the homeserver part
+        // Try different login formats
+        val loginAttempts = listOf(
+            // Format 1: Simple user field
+            LoginRequest(user = cleanUsername, password = password),
+            // Format 2: With identifier object
+            LoginRequestV2(identifier = Identifier(user = cleanUsername), password = password),
+            // Format 3: Full user ID with server
+            LoginRequest(user = "$cleanUsername:${cleanHomeserver.removePrefix("https://")}", password = password),
+            // Format 4: Full user ID with identifier
+            LoginRequestV2(identifier = Identifier(user = "$cleanUsername:${cleanHomeserver.removePrefix("https://")}"), password = password)
+        )
+
+        for ((index, loginRequest) in loginAttempts.withIndex()) {
+            println("Attempting login format ${index + 1}: $loginRequest")
+
+            try {
+                val response = client.post("$cleanHomeserver/_matrix/client/v3/login") {
+                    contentType(ContentType.Application.Json)
+                    setBody(loginRequest)
+                }
+
+                println("Login format ${index + 1} response status: ${response.status}")
+
+                if (response.status == HttpStatusCode.OK) {
+                    val loginResponse = response.body<LoginResponse>()
+                    return loginResponse.access_token
+                } else if (response.status == HttpStatusCode.Unauthorized) {
+                    // Wrong credentials, don't try other formats
+                    throw Exception("Invalid username or password")
+                }
+                // Continue to next format for other errors
+
+            } catch (e: Exception) {
+                println("Login format ${index + 1} failed: ${e.message}")
+                if (e.message?.contains("Invalid username or password") == true) {
+                    throw e // Don't continue if credentials are wrong
+                }
+                // Continue to next format
+            }
         }
 
-        println("Attempting login with user: $userId, homeserver: $cleanHomeserver")
+        throw Exception("All login formats failed - server may not support standard Matrix login")
 
-        val response = client.post("$cleanHomeserver/_matrix/client/v3/login") {
-            contentType(ContentType.Application.Json)
-            setBody(LoginRequest(user = userId, password = password))
-        }
-
-        println("Login response status: ${response.status}")
-
-        return when (response.status) {
-            HttpStatusCode.OK -> {
-                val loginResponse = response.body<LoginResponse>()
-                loginResponse.access_token
-            }
-            HttpStatusCode.Unauthorized -> {
-                throw Exception("Invalid username or password")
-            }
-            HttpStatusCode.Forbidden -> {
-                throw Exception("Login forbidden - check your account status")
-            }
-            HttpStatusCode.BadRequest -> {
-                throw Exception("Bad request - check username format (try without @ or :server)")
-            }
-            else -> {
-                throw Exception("Server error: ${response.status}")
-            }
-        }
     } catch (e: Exception) {
         println("Login failed: ${e.message}")
-        throw e // Re-throw to preserve the error message
+        throw e
     }
 }
 
