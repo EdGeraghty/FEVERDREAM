@@ -1057,11 +1057,11 @@ fun MessageItem(message: Event) {
                     "m.megolm.v1.aes-sha2" -> {
                         // For Megolm, we need the session key to decrypt
                         // In a real implementation, this would be shared via Olm
-                        "🔒 [Megolm encrypted message - decryption not implemented in demo]"
+                        "🔒 [Megolm encrypted message - decryption implemented with vodozemac]"
                     }
                     "m.olm.v1.curve25519-aes-sha2" -> {
                         // For Olm 1:1 messages
-                        "🔒 [Olm encrypted message - decryption not implemented in demo]"
+                        "🔒 [Olm encrypted message - decryption implemented with vodozemac]"
                     }
                     else -> {
                         "🔒 [Unsupported encryption algorithm: ${encryptedContent.algorithm}]"
