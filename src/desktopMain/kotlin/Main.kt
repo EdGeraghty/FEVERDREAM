@@ -28,7 +28,10 @@ import io.ktor.client.engine.apache.*
 
 val client = HttpClient(Apache) {
     install(ContentNegotiation) {
-        json(Json { ignoreUnknownKeys = true })
+        json(Json { 
+            ignoreUnknownKeys = true
+            encodeDefaults = true
+        })
     }
     engine {
         // Configure Apache HttpClient for better TLS support
