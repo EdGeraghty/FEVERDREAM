@@ -1,12 +1,15 @@
 import androidx.compose.desktop.ui.tooling.preview.Preview
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.*
+import androidx.compose.runtime.key
+import androidx.compose.ui.window.Window
 import io.ktor.client.*
 import io.ktor.client.call.*
 import io.ktor.client.engine.cio.CIO
@@ -76,6 +79,49 @@ data class Rooms(val invite: Map<String, InvitedRoom>? = null)
 
 @Serializable
 data class InvitedRoom(val invite_state: RoomState? = null)
+
+@Serializable
+data class MessageEvent(val type: String, val event_id: String, val sender: String, val origin_server_ts: Long, val content: MessageContent)
+
+@Serializable
+data class MessageContent(val msgtype: String, val body: String)
+
+@Serializable
+data class SendMessageRequest(val msgtype: String = "m.text", val body: String)
+
+@Serializable
+data class RoomMessagesResponse(val chunk: List<MessageEvent>)
+
+suspend fun getRoomMessages(homeserver: String, accessToken: String, roomId: String): List<MessageEvent> {
+    try {
+        val response = client.get("$homeserver/_matrix/client/v3/rooms/$roomId/messages") {
+            bearerAuth(accessToken)
+            parameter("limit", "50")
+            parameter("dir", "b")
+        }
+        if (response.status == HttpStatusCode.OK) {
+            val messagesResponse = response.body<RoomMessagesResponse>()
+            return messagesResponse.chunk.reversed() // Reverse to show oldest first
+        }
+    } catch (e: Exception) {
+        println("Get messages failed: ${e.message}")
+    }
+    return emptyList()
+}
+
+suspend fun sendMessage(homeserver: String, accessToken: String, roomId: String, message: String): Boolean {
+    try {
+        val response = client.put("$homeserver/_matrix/client/v3/rooms/$roomId/send/m.room.message/${System.currentTimeMillis()}") {
+            bearerAuth(accessToken)
+            contentType(ContentType.Application.Json)
+            setBody(SendMessageRequest(body = message))
+        }
+        return response.status == HttpStatusCode.OK
+    } catch (e: Exception) {
+        println("Send message failed: ${e.message}")
+    }
+    return false
+}
 
 suspend fun login(username: String, password: String, homeserver: String): String? {
     try {
@@ -370,6 +416,7 @@ fun ChatScreen(accessToken: String, homeserver: String) {
     var rooms by remember { mutableStateOf(listOf<String>()) }
     var invites by remember { mutableStateOf(listOf<RoomInvite>()) }
     var isLoading by remember { mutableStateOf(true) }
+    var openChatWindows by remember { mutableStateOf(setOf<String>()) }
     val scope = rememberCoroutineScope()
 
     LaunchedEffect(accessToken) {
@@ -454,12 +501,168 @@ fun ChatScreen(accessToken: String, homeserver: String) {
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(roomId, modifier = Modifier.weight(1f))
-                            Button(onClick = { /* TODO: Open chat for this room */ }) {
+                            Button(onClick = {
+                                if (roomId !in openChatWindows) {
+                                    openChatWindows = openChatWindows + roomId
+                                }
+                            }) {
                                 Text("Open")
                             }
                         }
                     }
                 }
+            }
+        }
+    }
+
+    // Render open chat windows
+    openChatWindows.forEach { roomId ->
+        key(roomId) {
+            Window(
+                onCloseRequest = {
+                    openChatWindows = openChatWindows - roomId
+                },
+                title = "Chat - $roomId"
+            ) {
+                ChatWindow(
+                    roomId = roomId,
+                    homeserver = homeserver,
+                    accessToken = accessToken,
+                    onClose = {
+                        openChatWindows = openChatWindows - roomId
+                    }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun ChatWindow(roomId: String, homeserver: String, accessToken: String, onClose: () -> Unit) {
+    var messages by remember { mutableStateOf(listOf<MessageEvent>()) }
+    var newMessage by remember { mutableStateOf("") }
+    var isLoading by remember { mutableStateOf(true) }
+    val scope = rememberCoroutineScope()
+    val listState = rememberLazyListState()
+
+    LaunchedEffect(roomId) {
+        isLoading = true
+        scope.launch {
+            messages = getRoomMessages(homeserver, accessToken, roomId)
+            isLoading = false
+        }
+    }
+
+    MaterialTheme {
+        Column(modifier = Modifier.fillMaxSize()) {
+            // Header
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("Chat: $roomId", style = MaterialTheme.typography.h6, modifier = Modifier.weight(1f))
+                Button(onClick = onClose) {
+                    Text("Close")
+                }
+            }
+
+            // Messages area
+            Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                if (isLoading) {
+                    CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
+                } else if (messages.isEmpty()) {
+                    Text("No messages yet", modifier = Modifier.align(Alignment.Center))
+                } else {
+                    LazyColumn(
+                        state = listState,
+                        modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
+                        reverseLayout = false
+                    ) {
+                        items(messages) { message ->
+                            MessageItem(message)
+                        }
+                    }
+
+                    // Auto-scroll to bottom when new messages arrive
+                    LaunchedEffect(messages.size) {
+                        listState.animateScrollToItem(messages.size - 1)
+                    }
+                }
+            }
+
+            // Message input area
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                TextField(
+                    value = newMessage,
+                    onValueChange = { newMessage = it },
+                    label = { Text("Type a message...") },
+                    modifier = Modifier.weight(1f),
+                    singleLine = true
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Button(
+                    onClick = {
+                        if (newMessage.isNotBlank()) {
+                            scope.launch {
+                                if (sendMessage(homeserver, accessToken, roomId, newMessage)) {
+                                    newMessage = ""
+                                    // Refresh messages
+                                    messages = getRoomMessages(homeserver, accessToken, roomId)
+                                }
+                            }
+                        }
+                    },
+                    enabled = newMessage.isNotBlank()
+                ) {
+                    Text("Send")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun MessageItem(message: MessageEvent) {
+    val isOwnMessage = message.sender == "You" // This would need to be updated with actual user ID
+    val backgroundColor = if (isOwnMessage) MaterialTheme.colors.primary else MaterialTheme.colors.surface
+    val textColor = if (isOwnMessage) MaterialTheme.colors.onPrimary else MaterialTheme.colors.onSurface
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        horizontalAlignment = if (isOwnMessage) Alignment.End else Alignment.Start
+    ) {
+        Card(
+            modifier = Modifier.widthIn(max = 300.dp),
+            backgroundColor = backgroundColor
+        ) {
+            Column(modifier = Modifier.padding(12.dp)) {
+                Text(
+                    text = message.sender,
+                    style = MaterialTheme.typography.caption,
+                    color = textColor.copy(alpha = 0.7f)
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = message.content.body,
+                    style = MaterialTheme.typography.body1,
+                    color = textColor
+                )
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = java.time.Instant.ofEpochMilli(message.origin_server_ts)
+                        .toString().substring(11, 19), // Show time only
+                    style = MaterialTheme.typography.caption,
+                    color = textColor.copy(alpha = 0.5f)
+                )
             }
         }
     }
