@@ -21,26 +21,10 @@ import io.ktor.serialization.kotlinx.json.*
 import kotlinx.coroutines.*
 import kotlinx.serialization.*
 import kotlinx.serialization.json.*
-import com.google.crypto.tink.Aead
-import com.google.crypto.tink.KeyTemplates
-import com.google.crypto.tink.KeysetHandle
-import com.google.crypto.tink.aead.AeadConfig
-import com.google.crypto.tink.aead.AeadKeyTemplates
-import java.security.KeyPair
-import java.security.KeyPairGenerator
-import java.security.PrivateKey
-import java.security.PublicKey
-import javax.crypto.KeyAgreement
-import javax.crypto.SecretKey
-import javax.crypto.spec.SecretKeySpec
-import javax.crypto.Cipher
-import javax.crypto.spec.GCMParameterSpec
-import java.security.MessageDigest
+import io.github.brevilo.jolm.*
 import java.security.SecureRandom
 import javax.net.ssl.SSLContext
 import javax.net.ssl.X509TrustManager
-
-import io.ktor.client.engine.apache.*
 
 val json = Json { 
     ignoreUnknownKeys = true
@@ -73,153 +57,61 @@ val client = HttpClient(Apache) {
 }
 
 // Global encryption state
-var encryptionInitialized = false
-var identityKeyPair: KeyPair? = null
-var deviceKeys = mutableMapOf<String, PublicKey>()
-val sessionKeys = mutableMapOf<String, SecretKey>()
+var olmAccount: Account? = null
+var olmSessions = mutableMapOf<String, Session>() // deviceId -> Session
+var outboundGroupSessions = mutableMapOf<String, OutboundGroupSession>() // roomId -> OutboundGroupSession
+var inboundGroupSessions = mutableMapOf<String, MutableMap<String, InboundGroupSession>>() // roomId -> sessionId -> InboundGroupSession
 
 // Global state for Matrix client
 var currentAccessToken: String? = null
 var currentHomeserver: String = "https://matrix.org"
 var currentDeviceId: String? = null
 
-// Initialize custom Olm-like encryption
+// Initialize Olm encryption
 fun initializeEncryption() {
-    if (!encryptionInitialized) {
+    if (olmAccount == null) {
         try {
-            // Register Tink Aead configuration first
-            AeadConfig.register()
-
-            // Generate identity key pair (ECDH)
-            val keyPairGenerator = KeyPairGenerator.getInstance("EC")
-            keyPairGenerator.initialize(256)
-            identityKeyPair = keyPairGenerator.generateKeyPair()
-
-            println("� Custom Olm-like encryption initialized")
-            println("🔑 Identity public key: ${java.util.Base64.getEncoder().encodeToString(identityKeyPair?.public?.encoded)}")
-
-            encryptionInitialized = true
+            val account = Account()
+            olmAccount = account
+            val identityKeys = account.identityKeys()
+            println("🔑 Olm encryption initialized")
+            println("Curve25519 key: ${identityKeys.curve25519}")
+            println("Ed25519 key: ${identityKeys.ed25519}")
         } catch (e: Exception) {
-            println("❌ Failed to initialize encryption: ${e.message}")
-            // Fallback to Tink
-            AeadConfig.register()
-            encryptionInitialized = true
-            println("🔄 Falling back to Tink encryption")
+            println("❌ Failed to initialize Olm encryption: ${e.message}")
         }
     }
 }
 
-// Create shared secret with another device's public key
-fun createSharedSecret(devicePublicKey: PublicKey): SecretKey {
-    val keyAgreement = KeyAgreement.getInstance("ECDH")
-    keyAgreement.init(identityKeyPair?.private)
-    keyAgreement.doPhase(devicePublicKey, true)
-    val sharedSecret = keyAgreement.generateSecret()
-
-    // Derive AES key from shared secret
-    val digest = MessageDigest.getInstance("SHA-256")
-    val keyBytes = digest.digest(sharedSecret)
-    return SecretKeySpec(keyBytes.copyOf(32), "AES")
-}
-
-// Get or create session key for a device
-fun getSessionKey(deviceId: String): SecretKey? {
-    return sessionKeys.getOrPut(deviceId) {
-        // For demo purposes, create a key with our own public key
-        // In a real implementation, you'd use the other device's public key
-        val ourPublicKey = identityKeyPair?.public ?: return null
-        createSharedSecret(ourPublicKey)
-    }
-}
-
-// Encrypt message using custom Olm-like protocol
-fun encryptMessageCustom(message: String, deviceId: String): String? {
-    return try {
-        // Use deterministic key derivation for consistent encryption/decryption
-        val derivedKey = deriveKeyFromDeviceId(deviceId)
-
-        // Use standard Java crypto with the derived key
-        val secretKey = SecretKeySpec(derivedKey, "AES")
-        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-        cipher.init(Cipher.ENCRYPT_MODE, secretKey)
-
-        val plaintext = message.toByteArray(Charsets.UTF_8)
-        val ciphertext = cipher.doFinal(plaintext)
-
-        // Combine IV and ciphertext for decryption
-        val iv = cipher.iv
-        val combined = iv + ciphertext
-
-        java.util.Base64.getEncoder().encodeToString(combined)
-    } catch (e: Exception) {
-        println("❌ Custom encryption failed: ${e.message}")
-        null
-    }
-}
-
-// Decrypt message using custom Olm-like protocol
-fun decryptMessageCustom(encryptedMessage: String, deviceId: String): String? {
-    return try {
-        // Use the same deterministic key derivation for decryption
-        val derivedKey = deriveKeyFromDeviceId(deviceId)
-
-        // Try to decode with different base64 variants for maximum compatibility
-        val combined = try {
-            // Try standard base64 first (Matrix spec compliant)
-            java.util.Base64.getDecoder().decode(encryptedMessage)
-        } catch (e: Exception) {
-            try {
-                // Fallback to URL-safe base64
-                java.util.Base64.getUrlDecoder().decode(encryptedMessage)
-            } catch (e2: Exception) {
-                // Handle base64 with padding issues or other variants
-                val cleanedMessage = encryptedMessage
-                    .replace('-', '+')
-                    .replace('_', '/')
-                    .replace(Regex("[^A-Za-z0-9+/]"), "") // Remove invalid characters
-                val paddedMessage = when (cleanedMessage.length % 4) {
-                    2 -> cleanedMessage + "=="
-                    3 -> cleanedMessage + "="
-                    else -> cleanedMessage
-                }
-                java.util.Base64.getDecoder().decode(paddedMessage)
+// Get or create Olm session for a device
+fun getOlmSession(deviceId: String, oneTimeKey: String?): Session {
+    return olmSessions.getOrPut(deviceId) {
+        val account = olmAccount ?: throw Exception("Olm account not initialized")
+        try {
+            if (oneTimeKey != null) {
+                Session.createInboundSession(account, oneTimeKey)
+            } else {
+                // For demo purposes, create a dummy session if no one-time key
+                // In a real implementation, you'd need to get the one-time key from the device
+                throw Exception("One-time key required for Olm session")
             }
+        } catch (e: Exception) {
+            println("❌ Failed to create Olm session: ${e.message}")
+            throw e
         }
-
-        // Debug logging for troubleshooting
-        if (combined.size < 13) {
-            println("⚠️  Decoded data too short: ${combined.size} bytes, expected at least 13")
-        }
-
-        // Extract IV (first 12 bytes for GCM) and ciphertext
-        if (combined.size < 13) { // Need at least 12 bytes for IV + 1 byte for ciphertext
-            throw Exception("Decoded data too short for decryption: ${combined.size} bytes, need at least 13")
-        }
-        val iv = combined.copyOfRange(0, 12)
-        val ciphertext = combined.copyOfRange(12, combined.size)
-
-        // Use standard Java crypto with the derived key
-        val secretKey = SecretKeySpec(derivedKey, "AES")
-        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-        val gcmParameterSpec = javax.crypto.spec.GCMParameterSpec(128, iv)
-        cipher.init(Cipher.DECRYPT_MODE, secretKey, gcmParameterSpec)
-
-        val plaintext = cipher.doFinal(ciphertext)
-        String(plaintext, Charsets.UTF_8)
-    } catch (e: Exception) {
-        println("❌ Custom decryption failed: ${e.message}")
-        null
     }
 }
 
-// Derive a consistent key from device ID for demo purposes
-fun deriveKeyFromDeviceId(deviceId: String): ByteArray {
-    // Use a simple key derivation: hash the device ID with a fixed salt
-    // In a real implementation, this would use proper key exchange
-    val combined = (deviceId + "FEVERDREAM_SALT").toByteArray(Charsets.UTF_8)
-    val digest = MessageDigest.getInstance("SHA-256")
-    val hash = digest.digest(combined)
-    return hash.copyOf(32) // AES-256 needs 32 bytes
+// Get or create outbound group session for a room
+fun getOutboundGroupSession(roomId: String): OutboundGroupSession {
+    return outboundGroupSessions.getOrPut(roomId) {
+        try {
+            OutboundGroupSession()
+        } catch (e: Exception) {
+            println("❌ Failed to create outbound group session: ${e.message}")
+            throw e
+        }
+    }
 }
 
 @Serializable
@@ -270,9 +162,9 @@ data class MessageContent(val msgtype: String, val body: String)
 @Serializable
 data class EncryptedMessageContent(
     val algorithm: String,
-    val ciphertext: String,
+    val ciphertext: JsonElement, // For Olm it's Map<String, CiphertextInfo>, for Megolm it's String
+    val sender_key: String,
     val device_id: String? = null,
-    val sender_key: String? = null,
     val session_id: String? = null
 )
 
@@ -638,30 +530,31 @@ suspend fun sendMessage(roomId: String, message: String): Boolean {
 
         if (isEncrypted) {
             try {
-                // Use custom Olm-like encryption with consistent device ID
+                val account = olmAccount ?: throw Exception("Olm account not initialized")
                 val deviceId = currentDeviceId ?: "FEVERDREAM_DEVICE"
-                val encryptedText = encryptMessageCustom(message, deviceId)
+                val identityKeys = account.identityKeys()
 
-                if (encryptedText != null) {
-                    val encryptedContent = EncryptedSendMessageRequest(
-                        ciphertext = encryptedText,
-                        device_id = deviceId,
-                        sender_key = java.util.Base64.getEncoder().encodeToString(identityKeyPair?.public?.encoded ?: byteArrayOf()),
-                        session_id = deviceId
-                    )
+                // Use Megolm for group encryption
+                val outboundSession = getOutboundGroupSession(roomId)
 
-                    println("🔐 Sending Custom Olm-like encrypted message to room $roomId")
+                val encryptedText = outboundSession.encrypt(message)
 
-                    val response = client.put("$currentHomeserver/_matrix/client/v3/rooms/$roomId/send/m.room.encrypted/${System.currentTimeMillis()}") {
-                        bearerAuth(token)
-                        contentType(ContentType.Application.Json)
-                        setBody(encryptedContent)
-                    }
-                    return response.status == HttpStatusCode.OK
-                } else {
-                    println("❌ Custom encryption failed, message not sent")
-                    return false
+                val encryptedContent = mapOf(
+                    "algorithm" to "m.megolm.v1.aes-sha2",
+                    "ciphertext" to encryptedText,
+                    "sender_key" to identityKeys.curve25519,
+                    "device_id" to deviceId,
+                    "session_id" to outboundSession.sessionId()
+                )
+
+                println("🔐 Sending Megolm encrypted message to room $roomId")
+
+                val response = client.put("$currentHomeserver/_matrix/client/v3/rooms/$roomId/send/m.room.encrypted/${System.currentTimeMillis()}") {
+                    bearerAuth(token)
+                    contentType(ContentType.Application.Json)
+                    setBody(encryptedContent)
                 }
+                return response.status == HttpStatusCode.OK
             } catch (e: Exception) {
                 println("❌ Encryption failed: ${e.message}")
                 return false
@@ -983,7 +876,7 @@ fun ChatWindow(roomId: String, onClose: () -> Unit) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text("Chat: $roomId", style = MaterialTheme.typography.h6)
                     if (isEncrypted) {
-                        Text("� Encrypted Room (Custom Olm-like encryption active)", style = MaterialTheme.typography.caption, color = MaterialTheme.colors.primary)
+                        Text("🔐 Encrypted Room (Olm/Megolm encryption active)", style = MaterialTheme.typography.caption, color = MaterialTheme.colors.primary)
                     }
                 }
                 Button(onClick = onClose) {
@@ -1067,15 +960,14 @@ fun MessageItem(message: Event) {
                 val encryptedContent = json.decodeFromJsonElement<EncryptedMessageContent>(message.content)
 
                 when (encryptedContent.algorithm) {
-                    "m.custom.feverdream.v1" -> {
-                        // Use the device_id from the encrypted message for decryption
-                        val deviceId = encryptedContent.device_id ?: currentDeviceId ?: "FEVERDREAM_DEVICE"
-                        val decryptedText = decryptMessageCustom(encryptedContent.ciphertext, deviceId)
-                        if (decryptedText != null) {
-                            "🔓 [Custom Decrypted: $decryptedText]"
-                        } else {
-                            "� [Olm decryption failed - unable to decrypt message]"
-                        }
+                    "m.megolm.v1.aes-sha2" -> {
+                        // For Megolm, we need the session key to decrypt
+                        // In a real implementation, this would be shared via Olm
+                        "🔒 [Megolm encrypted message - decryption not implemented in demo]"
+                    }
+                    "m.olm.v1.curve25519-aes-sha2" -> {
+                        // For Olm 1:1 messages
+                        "🔒 [Olm encrypted message - decryption not implemented in demo]"
                     }
                     else -> {
                         "🔒 [Unsupported encryption algorithm: ${encryptedContent.algorithm}]"
@@ -1083,7 +975,7 @@ fun MessageItem(message: Event) {
                 }
 
             } catch (e: Exception) {
-                "🔒 [Encrypted message - Custom decryption error: ${e.message}]"
+                "🔒 [Encrypted message - decryption error: ${e.message}]"
             }
         }
         else -> "[${message.type}]"

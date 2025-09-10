@@ -29,8 +29,8 @@ kotlin {
                 implementation("io.ktor:ktor-client-content-negotiation:2.3.0")
                 implementation("io.ktor:ktor-serialization-kotlinx-json:2.3.0")
 
-                // Encryption support - Custom Olm-like implementation
-                implementation("com.google.crypto.tink:tink:1.7.0")
+                // Encryption support - Olm/Megolm implementation
+                implementation("io.github.brevilo:jolm:1.1.1")
             }
         }
         val desktopMain by getting {
