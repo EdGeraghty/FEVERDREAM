@@ -119,7 +119,9 @@ data class ServerDelegationResponse(
 @Serializable
 data class ClientWellKnownResponse(
     @SerialName("m.homeserver")
-    val homeserver: HomeserverInfo? = null
+    val homeserver: HomeserverInfo? = null,
+    @SerialName("org.matrix.msc3575.proxy")
+    val proxy: JsonElement? = null
 )
 
 @Serializable
@@ -310,7 +312,7 @@ suspend fun login(username: String, password: String, homeserver: String): Login
             }
         } catch (e: Exception) {
             // If the extracted homeserver fails and it's different from the provided one, try the provided homeserver
-            if (actualHomeserver != cleanHomeserver && e.message?.contains("400") == true) {
+            if (actualHomeserver != cleanHomeserver && e.message?.contains("400") == true && cleanHomeserver.isNotBlank()) {
                 println("Login failed on discovered homeserver $actualHomeserver, trying provided homeserver: $cleanHomeserver")
                 currentHomeserver = cleanHomeserver
 
