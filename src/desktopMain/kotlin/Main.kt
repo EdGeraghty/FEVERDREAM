@@ -85,6 +85,9 @@ var currentHomeserver: String = "https://matrix.org"
 fun initializeEncryption() {
     if (!encryptionInitialized) {
         try {
+            // Register Tink Aead configuration first
+            AeadConfig.register()
+
             // Generate identity key pair (ECDH)
             val keyPairGenerator = KeyPairGenerator.getInstance("EC")
             keyPairGenerator.initialize(256)
@@ -128,11 +131,12 @@ fun getSessionKey(deviceId: String): SecretKey? {
 }
 
 // Encrypt message using custom Olm-like protocol
+@Suppress("DEPRECATION")
 fun encryptMessageCustom(message: String, deviceId: String): String? {
     return try {
-        // Use Tink Aead with a new key for each message (simplified Olm-like approach)
+        // Use Tink Aead with AES256_GCM template
         val keysetHandle = KeysetHandle.generateNew(
-            KeyTemplates.get("AES256_GCM")
+            AeadKeyTemplates.AES256_GCM
         )
         val aead = keysetHandle.getPrimitive(Aead::class.java)
 
@@ -147,11 +151,12 @@ fun encryptMessageCustom(message: String, deviceId: String): String? {
 }
 
 // Decrypt message using custom Olm-like protocol
+@Suppress("DEPRECATION")
 fun decryptMessageCustom(encryptedMessage: String, deviceId: String): String? {
     return try {
-        // Use Tink Aead with a new key for each message (simplified Olm-like approach)
+        // Use Tink Aead with AES256_GCM template
         val keysetHandle = KeysetHandle.generateNew(
-            KeyTemplates.get("AES256_GCM")
+            AeadKeyTemplates.AES256_GCM
         )
         val aead = keysetHandle.getPrimitive(Aead::class.java)
 
