@@ -8,6 +8,7 @@ repositories {
     mavenCentral()
     maven { url = uri("https://oss.sonatype.org/content/repositories/snapshots") }
     maven { url = uri("https://jitpack.io") }
+    maven { url = uri("https://s01.oss.sonatype.org/content/repositories/snapshots/") }
 }
 
 kotlin {
@@ -26,8 +27,9 @@ kotlin {
                 implementation("io.ktor:ktor-client-cio:2.3.0")
                 implementation("io.ktor:ktor-client-content-negotiation:2.3.0")
                 implementation("io.ktor:ktor-serialization-kotlinx-json:2.3.0")
-                // Note: Matrix encryption libraries would be added here when available
-                // For now, using placeholder implementations
+
+                // Encryption support - using a simpler approach
+                implementation("com.google.crypto.tink:tink:1.7.0")
             }
         }
         val desktopMain by getting {

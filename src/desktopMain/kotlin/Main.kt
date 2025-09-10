@@ -39,6 +39,11 @@ val client = HttpClient(CIO) {
     }
 }
 
+// Global state for encryption
+var currentAccessToken: String? = null
+var currentHomeserver: String = "https://matrix.org"
+var encryptionEnabled: Boolean = false
+
 @Serializable
 data class LoginRequest(val type: String = "m.login.password", val user: String, val password: String)
 
@@ -49,13 +54,7 @@ data class LoginRequestV2(val type: String = "m.login.password", val identifier:
 data class Identifier(val type: String = "m.id.user", val user: String)
 
 @Serializable
-data class LoginResponse(val access_token: String)
-
-@Serializable
-data class LoginFlowsResponse(val flows: List<LoginFlow>)
-
-@Serializable
-data class LoginFlow(val type: String)
+data class LoginResponse(val user_id: String, val access_token: String, val device_id: String)
 
 @Serializable
 data class JoinedRoomsResponse(val joined_rooms: List<String>)
@@ -67,22 +66,25 @@ data class RoomInvite(val room_id: String, val sender: String, val state: RoomSt
 data class RoomState(val events: List<StateEvent>)
 
 @Serializable
-data class StateEvent(val type: String, val state_key: String, val sender: String, val content: RoomNameContent)
-
-@Serializable
-data class RoomNameContent(val name: String? = null)
+data class StateEvent(val type: String, val state_key: String, val sender: String, val content: JsonElement)
 
 @Serializable
 data class SyncResponse(val rooms: Rooms? = null)
 
 @Serializable
-data class Rooms(val invite: Map<String, InvitedRoom>? = null)
+data class Rooms(val invite: Map<String, InvitedRoom>? = null, val join: Map<String, JoinedRoom>? = null)
 
 @Serializable
 data class InvitedRoom(val invite_state: RoomState? = null)
 
 @Serializable
-data class MessageEvent(val type: String, val event_id: String, val sender: String, val origin_server_ts: Long, val content: JsonElement)
+data class JoinedRoom(val state: RoomState? = null, val timeline: Timeline? = null)
+
+@Serializable
+data class Timeline(val events: List<Event> = emptyList())
+
+@Serializable
+data class Event(val type: String, val event_id: String, val sender: String, val origin_server_ts: Long, val content: JsonElement)
 
 @Serializable
 data class MessageContent(val msgtype: String, val body: String)
@@ -112,118 +114,10 @@ data class EncryptedSendMessageRequest(
 )
 
 @Serializable
-data class RoomMessagesResponse(val chunk: List<MessageEvent>)
+data class RoomMessagesResponse(val chunk: List<Event>)
 
-suspend fun getRoomMessages(homeserver: String, accessToken: String, roomId: String): List<MessageEvent> {
+suspend fun login(username: String, password: String, homeserver: String): LoginResponse? {
     try {
-        val response = client.get("$homeserver/_matrix/client/v3/rooms/$roomId/messages") {
-            bearerAuth(accessToken)
-            parameter("limit", "50")
-            parameter("dir", "b")
-        }
-        if (response.status == HttpStatusCode.OK) {
-            val messagesResponse = response.body<RoomMessagesResponse>()
-            return messagesResponse.chunk.reversed() // Reverse to show oldest first
-        }
-    } catch (e: Exception) {
-        println("Get messages failed: ${e.message}")
-    }
-    return emptyList()
-}
-
-suspend fun isRoomEncrypted(homeserver: String, accessToken: String, roomId: String): Boolean {
-    try {
-        val response = client.get("$homeserver/_matrix/client/v3/rooms/$roomId/state/m.room.encryption") {
-            bearerAuth(accessToken)
-        }
-        return response.status == HttpStatusCode.OK
-    } catch (e: Exception) {
-        // Room is not encrypted if we can't get encryption state
-        return false
-    }
-}
-
-suspend fun decryptMessage(encryptedContent: EncryptedMessageContent, roomId: String): String {
-    try {
-        // This is a placeholder for actual decryption logic
-        // In a real implementation, you would:
-        // 1. Get the Olm/Megolm session for this room
-        // 2. Decrypt the ciphertext using the session
-        // 3. Return the decrypted plaintext
-
-        println("Attempting to decrypt message with algorithm: ${encryptedContent.algorithm}")
-
-        // Placeholder: return a decrypted message indicator
-        return "[Encrypted message - decryption not yet implemented]"
-
-    } catch (e: Exception) {
-        println("Decryption failed: ${e.message}")
-        return "[Failed to decrypt message]"
-    }
-}
-
-suspend fun encryptMessage(message: String, roomId: String): EncryptedMessageContent? {
-    try {
-        // This is a placeholder for actual encryption logic
-        // In a real implementation, you would:
-        // 1. Get or create a Megolm session for this room
-        // 2. Encrypt the message using the session
-        // 3. Return the encrypted content
-
-        println("Attempting to encrypt message for room: $roomId")
-
-        // Placeholder: return mock encrypted content
-        return EncryptedMessageContent(
-            algorithm = "m.megolm.v1.aes-sha2",
-            ciphertext = "encrypted_placeholder_${System.currentTimeMillis()}",
-            device_id = "placeholder_device",
-            sender_key = "placeholder_sender_key",
-            session_id = "placeholder_session"
-        )
-
-    } catch (e: Exception) {
-        println("Encryption failed: ${e.message}")
-        return null
-    }
-}
-
-suspend fun sendMessage(homeserver: String, accessToken: String, roomId: String, message: String): Boolean {
-    try {
-        // Check if room is encrypted
-        val isEncrypted = isRoomEncrypted(homeserver, accessToken, roomId)
-
-        if (isEncrypted) {
-            // Encrypt the message
-            val encryptedContent = encryptMessage(message, roomId)
-            if (encryptedContent != null) {
-                val response = client.put("$homeserver/_matrix/client/v3/rooms/$roomId/send/m.room.encrypted/${System.currentTimeMillis()}") {
-                    bearerAuth(accessToken)
-                    contentType(ContentType.Application.Json)
-                    setBody(encryptedContent)
-                }
-                return response.status == HttpStatusCode.OK
-            } else {
-                println("Failed to encrypt message")
-                return false
-            }
-        } else {
-            // Send unencrypted message
-            val response = client.put("$homeserver/_matrix/client/v3/rooms/$roomId/send/m.room.message/${System.currentTimeMillis()}") {
-                bearerAuth(accessToken)
-                contentType(ContentType.Application.Json)
-                setBody(SendMessageRequest(body = message))
-            }
-            return response.status == HttpStatusCode.OK
-        }
-    } catch (e: Exception) {
-        println("Send message failed: ${e.message}")
-    }
-    return false
-}
-
-suspend fun login(username: String, password: String, homeserver: String): String? {
-    try {
-        // Ensure homeserver has https
         val cleanHomeserver = if (homeserver.startsWith("http://")) {
             homeserver.replace("http://", "https://")
         } else if (!homeserver.startsWith("https://")) {
@@ -232,83 +126,29 @@ suspend fun login(username: String, password: String, homeserver: String): Strin
             homeserver
         }
 
-        // Clean username - remove @ if present
         val cleanUsername = username.removePrefix("@")
+        val userId = if (cleanUsername.contains(":")) cleanUsername else "$cleanUsername:${cleanHomeserver.removePrefix("https://").removePrefix("http://")}"
 
-        // Parse username to separate user and server parts
-        val (userPart, userServerPart) = if (cleanUsername.contains(":")) {
-            val parts = cleanUsername.split(":", limit = 2)
-            parts[0] to parts[1]
+        println("Attempting login with user: $userId")
+
+        val loginRequest = LoginRequestV2(
+            identifier = Identifier(user = userId),
+            password = password
+        )
+
+        val response = client.post("$cleanHomeserver/_matrix/client/v3/login") {
+            contentType(ContentType.Application.Json)
+            setBody(loginRequest)
+        }
+
+        if (response.status == HttpStatusCode.OK) {
+            val loginResponse = response.body<LoginResponse>()
+            currentAccessToken = loginResponse.access_token
+            currentHomeserver = cleanHomeserver
+            return loginResponse
         } else {
-            cleanUsername to null
+            throw Exception("Login failed: ${response.status}")
         }
-
-        val serverDomain = cleanHomeserver.removePrefix("https://").removePrefix("http://")
-        println("Parsed username: user='$userPart', userServer='${userServerPart ?: "none"}', homeserverDomain='$serverDomain'")
-
-        // Try different login formats
-        val loginAttempts = mutableListOf<Any>()
-
-        // Format 1: Simple user field (just the localpart)
-        loginAttempts.add(LoginRequest(user = userPart, password = password))
-
-        // Format 2: With identifier object (just the localpart)
-        loginAttempts.add(LoginRequestV2(identifier = Identifier(user = userPart), password = password))
-
-        // Only add server-specific formats if the username didn't already include a server
-        if (userServerPart == null) {
-            // Format 3: Full user ID with server
-            loginAttempts.add(LoginRequest(user = "$userPart:$serverDomain", password = password))
-
-            // Format 4: Full user ID with identifier
-            loginAttempts.add(LoginRequestV2(identifier = Identifier(user = "$userPart:$serverDomain"), password = password))
-        } else {
-            // If username already has server, use it as-is
-            loginAttempts.add(LoginRequest(user = cleanUsername, password = password))
-            loginAttempts.add(LoginRequestV2(identifier = Identifier(user = cleanUsername), password = password))
-        }
-
-        // Format 5: Very basic map format
-        loginAttempts.add(mapOf(
-            "type" to "m.login.password",
-            "user" to userPart,
-            "password" to password
-        ))
-
-        for ((index, loginRequest) in loginAttempts.withIndex()) {
-            println("Attempting login format ${index + 1}: $loginRequest")
-
-            try {
-                val response = client.post("$cleanHomeserver/_matrix/client/v3/login") {
-                    contentType(ContentType.Application.Json)
-                    setBody(loginRequest)
-                }
-
-                println("Login format ${index + 1} response status: ${response.status}")
-
-                if (response.status == HttpStatusCode.OK) {
-                    val loginResponse = response.body<LoginResponse>()
-                    return loginResponse.access_token
-                } else if (response.status == HttpStatusCode.Unauthorized) {
-                    // Wrong credentials, don't try other formats
-                    throw Exception("Invalid username or password")
-                } else if (response.status == HttpStatusCode.Forbidden) {
-                    // Account might be deactivated or other auth issue
-                    throw Exception("Login forbidden - check your account status")
-                }
-                // Continue to next format for other errors
-
-            } catch (e: Exception) {
-                println("Login format ${index + 1} failed: ${e.message}")
-                if (e.message?.contains("Invalid username or password") == true ||
-                    e.message?.contains("Login forbidden") == true) {
-                    throw e // Don't continue if credentials are wrong
-                }
-                // Continue to next format
-            }
-        }
-
-        throw Exception("All login formats failed - server may have custom requirements")
 
     } catch (e: Exception) {
         println("Login failed: ${e.message}")
@@ -316,10 +156,11 @@ suspend fun login(username: String, password: String, homeserver: String): Strin
     }
 }
 
-suspend fun getJoinedRooms(homeserver: String, accessToken: String): List<String> {
+suspend fun getJoinedRooms(): List<String> {
+    val token = currentAccessToken ?: return emptyList()
     try {
-        val response = client.get("$homeserver/_matrix/client/v3/joined_rooms") {
-            bearerAuth(accessToken)
+        val response = client.get("$currentHomeserver/_matrix/client/v3/joined_rooms") {
+            bearerAuth(token)
         }
         if (response.status == HttpStatusCode.OK) {
             val roomsResponse = response.body<JoinedRoomsResponse>()
@@ -331,11 +172,11 @@ suspend fun getJoinedRooms(homeserver: String, accessToken: String): List<String
     return emptyList()
 }
 
-suspend fun getRoomInvites(homeserver: String, accessToken: String): List<RoomInvite> {
+suspend fun getRoomInvites(): List<RoomInvite> {
+    val token = currentAccessToken ?: return emptyList()
     try {
-        // Use sync endpoint to get invited rooms
-        val response = client.get("$homeserver/_matrix/client/v3/sync") {
-            bearerAuth(accessToken)
+        val response = client.get("$currentHomeserver/_matrix/client/v3/sync") {
+            bearerAuth(token)
             parameter("filter", """{"room":{"state":{"lazy_load_members":true},"timeline":{"lazy_load_members":true},"ephemeral":{"lazy_load_members":true}}}""")
             parameter("timeout", "0")
         }
@@ -356,10 +197,64 @@ suspend fun getRoomInvites(homeserver: String, accessToken: String): List<RoomIn
     return emptyList()
 }
 
-suspend fun acceptRoomInvite(homeserver: String, accessToken: String, roomId: String): Boolean {
+suspend fun isRoomEncrypted(roomId: String): Boolean {
+    val token = currentAccessToken ?: return false
     try {
-        val response = client.post("$homeserver/_matrix/client/v3/rooms/$roomId/join") {
-            bearerAuth(accessToken)
+        val response = client.get("$currentHomeserver/_matrix/client/v3/rooms/$roomId/state/m.room.encryption") {
+            bearerAuth(token)
+        }
+        return response.status == HttpStatusCode.OK
+    } catch (e: Exception) {
+        return false
+    }
+}
+
+suspend fun getRoomMessages(roomId: String): List<Event> {
+    val token = currentAccessToken ?: return emptyList()
+    try {
+        val response = client.get("$currentHomeserver/_matrix/client/v3/rooms/$roomId/messages") {
+            bearerAuth(token)
+            parameter("limit", "50")
+            parameter("dir", "b")
+        }
+        if (response.status == HttpStatusCode.OK) {
+            val messagesResponse = response.body<RoomMessagesResponse>()
+            return messagesResponse.chunk.reversed()
+        }
+    } catch (e: Exception) {
+        println("Get messages failed: ${e.message}")
+    }
+    return emptyList()
+}
+
+suspend fun sendMessage(roomId: String, message: String): Boolean {
+    val token = currentAccessToken ?: return false
+    try {
+        val isEncrypted = isRoomEncrypted(roomId)
+
+        if (isEncrypted) {
+            // For now, show that encryption is detected but not fully implemented
+            println("Room $roomId is encrypted - encryption not yet fully implemented")
+            return false
+        } else {
+            val response = client.put("$currentHomeserver/_matrix/client/v3/rooms/$roomId/send/m.room.message/${System.currentTimeMillis()}") {
+                bearerAuth(token)
+                contentType(ContentType.Application.Json)
+                setBody(SendMessageRequest(body = message))
+            }
+            return response.status == HttpStatusCode.OK
+        }
+    } catch (e: Exception) {
+        println("Send message failed: ${e.message}")
+    }
+    return false
+}
+
+suspend fun acceptRoomInvite(roomId: String): Boolean {
+    val token = currentAccessToken ?: return false
+    try {
+        val response = client.post("$currentHomeserver/_matrix/client/v3/rooms/$roomId/join") {
+            bearerAuth(token)
             contentType(ContentType.Application.Json)
             setBody(mapOf<String, String>())
         }
@@ -370,10 +265,11 @@ suspend fun acceptRoomInvite(homeserver: String, accessToken: String, roomId: St
     return false
 }
 
-suspend fun rejectRoomInvite(homeserver: String, accessToken: String, roomId: String): Boolean {
+suspend fun rejectRoomInvite(roomId: String): Boolean {
+    val token = currentAccessToken ?: return false
     try {
-        val response = client.post("$homeserver/_matrix/client/v3/rooms/$roomId/leave") {
-            bearerAuth(accessToken)
+        val response = client.post("$currentHomeserver/_matrix/client/v3/rooms/$roomId/leave") {
+            bearerAuth(token)
             contentType(ContentType.Application.Json)
             setBody(mapOf<String, String>())
         }
@@ -382,27 +278,6 @@ suspend fun rejectRoomInvite(homeserver: String, accessToken: String, roomId: St
         println("Reject invite failed: ${e.message}")
     }
     return false
-}
-
-suspend fun getLoginFlows(homeserver: String): List<String> {
-    try {
-        val cleanHomeserver = if (homeserver.startsWith("http://")) {
-            homeserver.replace("http://", "https://")
-        } else if (!homeserver.startsWith("https://")) {
-            "https://$homeserver"
-        } else {
-            homeserver
-        }
-
-        val response = client.get("$cleanHomeserver/_matrix/client/v3/login")
-        if (response.status == HttpStatusCode.OK) {
-            val flowsResponse = response.body<LoginFlowsResponse>()
-            return flowsResponse.flows.map { it.type }
-        }
-    } catch (e: Exception) {
-        println("Failed to get login flows: ${e.message}")
-    }
-    return emptyList()
 }
 
 fun main() = application {
@@ -415,13 +290,13 @@ fun main() = application {
 @Preview
 fun App() {
     val scope = rememberCoroutineScope()
-    var accessToken by remember { mutableStateOf<String?>(null) }
+    var loginResponse by remember { mutableStateOf<LoginResponse?>(null) }
     var homeserver by remember { mutableStateOf("https://matrix.org") }
     var error by remember { mutableStateOf<String?>(null) }
     var isLoading by remember { mutableStateOf(false) }
 
     MaterialTheme {
-        if (accessToken == null) {
+        if (loginResponse == null) {
             LoginScreen(
                 onLogin = { username, password, hs ->
                     if (username.isBlank() || password.isBlank() || hs.isBlank()) {
@@ -433,8 +308,8 @@ fun App() {
                     homeserver = hs
                     scope.launch {
                         try {
-                            val token = login(username, password, homeserver)
-                            accessToken = token
+                            val response = login(username, password, homeserver)
+                            loginResponse = response
                         } catch (e: Exception) {
                             error = e.message ?: "Login failed. Please try again."
                         } finally {
@@ -446,7 +321,7 @@ fun App() {
                 isLoading = isLoading
             )
         } else {
-            ChatScreen(accessToken!!, homeserver)
+            ChatScreen(loginResponse!!)
         }
     }
 }
@@ -465,6 +340,7 @@ fun LoginScreen(onLogin: (String, String, String) -> Unit, error: String?, isLoa
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Text("FEVERDREAM", style = MaterialTheme.typography.h4)
+        Text("Matrix Client with Encryption Support", style = MaterialTheme.typography.subtitle1)
         Spacer(modifier = Modifier.height(32.dp))
         TextField(
             value = username,
@@ -510,24 +386,25 @@ fun LoginScreen(onLogin: (String, String, String) -> Unit, error: String?, isLoa
 }
 
 @Composable
-fun ChatScreen(accessToken: String, homeserver: String) {
+fun ChatScreen(loginResponse: LoginResponse) {
     var rooms by remember { mutableStateOf(listOf<String>()) }
     var invites by remember { mutableStateOf(listOf<RoomInvite>()) }
     var isLoading by remember { mutableStateOf(true) }
     var openChatWindows by remember { mutableStateOf(setOf<String>()) }
     val scope = rememberCoroutineScope()
 
-    LaunchedEffect(accessToken) {
+    LaunchedEffect(loginResponse) {
         isLoading = true
         scope.launch {
-            rooms = getJoinedRooms(homeserver, accessToken)
-            invites = getRoomInvites(homeserver, accessToken)
+            rooms = getJoinedRooms()
+            invites = getRoomInvites()
             isLoading = false
         }
     }
 
     Column(modifier = Modifier.padding(16.dp)) {
         Text("FEVERDREAM", style = MaterialTheme.typography.h5)
+        Text("Logged in as: ${loginResponse.user_id}", style = MaterialTheme.typography.caption)
         Spacer(modifier = Modifier.height(16.dp))
 
         if (isLoading) {
@@ -542,7 +419,16 @@ fun ChatScreen(accessToken: String, homeserver: String) {
                 invites.forEach { invite ->
                     Card(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
                         Column(modifier = Modifier.padding(16.dp)) {
-                            val roomName = invite.state.events.firstOrNull()?.content?.name ?: invite.room_id
+                            val roomName = invite.state.events.firstOrNull()?.let { event ->
+                                if (event.type == "m.room.name") {
+                                    try {
+                                        Json.decodeFromJsonElement<Map<String, String>>(event.content)["name"] ?: invite.room_id
+                                    } catch (e: Exception) {
+                                        invite.room_id
+                                    }
+                                } else invite.room_id
+                            } ?: invite.room_id
+
                             Text("Room: $roomName", style = MaterialTheme.typography.body1)
                             Text("Invited by: ${invite.sender}", style = MaterialTheme.typography.body2)
 
@@ -551,10 +437,10 @@ fun ChatScreen(accessToken: String, homeserver: String) {
                                 Button(
                                     onClick = {
                                         scope.launch {
-                                            if (acceptRoomInvite(homeserver, accessToken, invite.room_id)) {
+                                            if (acceptRoomInvite(invite.room_id)) {
                                                 // Refresh data after accepting
-                                                rooms = getJoinedRooms(homeserver, accessToken)
-                                                invites = getRoomInvites(homeserver, accessToken)
+                                                rooms = getJoinedRooms()
+                                                invites = getRoomInvites()
                                             }
                                         }
                                     },
@@ -566,9 +452,9 @@ fun ChatScreen(accessToken: String, homeserver: String) {
                                 Button(
                                     onClick = {
                                         scope.launch {
-                                            if (rejectRoomInvite(homeserver, accessToken, invite.room_id)) {
+                                            if (rejectRoomInvite(invite.room_id)) {
                                                 // Refresh invites after rejecting
-                                                invites = getRoomInvites(homeserver, accessToken)
+                                                invites = getRoomInvites()
                                             }
                                         }
                                     },
@@ -624,8 +510,6 @@ fun ChatScreen(accessToken: String, homeserver: String) {
             ) {
                 ChatWindow(
                     roomId = roomId,
-                    homeserver = homeserver,
-                    accessToken = accessToken,
                     onClose = {
                         openChatWindows = openChatWindows - roomId
                     }
@@ -636,8 +520,8 @@ fun ChatScreen(accessToken: String, homeserver: String) {
 }
 
 @Composable
-fun ChatWindow(roomId: String, homeserver: String, accessToken: String, onClose: () -> Unit) {
-    var messages by remember { mutableStateOf(listOf<MessageEvent>()) }
+fun ChatWindow(roomId: String, onClose: () -> Unit) {
+    var messages by remember { mutableStateOf(listOf<Event>()) }
     var newMessage by remember { mutableStateOf("") }
     var isLoading by remember { mutableStateOf(true) }
     var isEncrypted by remember { mutableStateOf(false) }
@@ -647,8 +531,8 @@ fun ChatWindow(roomId: String, homeserver: String, accessToken: String, onClose:
     LaunchedEffect(roomId) {
         isLoading = true
         scope.launch {
-            messages = getRoomMessages(homeserver, accessToken, roomId)
-            isEncrypted = isRoomEncrypted(homeserver, accessToken, roomId)
+            messages = getRoomMessages(roomId)
+            isEncrypted = isRoomEncrypted(roomId)
             isLoading = false
         }
     }
@@ -665,7 +549,7 @@ fun ChatWindow(roomId: String, homeserver: String, accessToken: String, onClose:
                 Column(modifier = Modifier.weight(1f)) {
                     Text("Chat: $roomId", style = MaterialTheme.typography.h6)
                     if (isEncrypted) {
-                        Text("🔒 Encrypted Room", style = MaterialTheme.typography.caption, color = MaterialTheme.colors.primary)
+                        Text("🔒 Encrypted Room (Decryption Coming Soon)", style = MaterialTheme.typography.caption, color = MaterialTheme.colors.primary)
                     }
                 }
                 Button(onClick = onClose) {
@@ -686,7 +570,7 @@ fun ChatWindow(roomId: String, homeserver: String, accessToken: String, onClose:
                         reverseLayout = false
                     ) {
                         items(messages) { message ->
-                            MessageItem(message, roomId, scope)
+                            MessageItem(message)
                         }
                     }
 
@@ -716,10 +600,10 @@ fun ChatWindow(roomId: String, homeserver: String, accessToken: String, onClose:
                     onClick = {
                         if (newMessage.isNotBlank()) {
                             scope.launch {
-                                if (sendMessage(homeserver, accessToken, roomId, newMessage)) {
+                                if (sendMessage(roomId, newMessage)) {
                                     newMessage = ""
                                     // Refresh messages
-                                    messages = getRoomMessages(homeserver, accessToken, roomId)
+                                    messages = getRoomMessages(roomId)
                                 }
                             }
                         }
@@ -734,12 +618,8 @@ fun ChatWindow(roomId: String, homeserver: String, accessToken: String, onClose:
 }
 
 @Composable
-fun MessageItem(message: MessageEvent, roomId: String, scope: CoroutineScope) {
-    var decryptedBody by remember { mutableStateOf<String?>(null) }
-    var isDecrypting by remember { mutableStateOf(false) }
-
-    // Handle message content based on type
-    val displayBody = when (message.type) {
+fun MessageItem(message: Event) {
+    val displayText = when (message.type) {
         "m.room.message" -> {
             try {
                 val content = Json.decodeFromJsonElement<MessageContent>(message.content)
@@ -749,27 +629,12 @@ fun MessageItem(message: MessageEvent, roomId: String, scope: CoroutineScope) {
             }
         }
         "m.room.encrypted" -> {
-            if (decryptedBody == null && !isDecrypting) {
-                isDecrypting = true
-                scope.launch {
-                    try {
-                        val encryptedContent = Json.decodeFromJsonElement<EncryptedMessageContent>(message.content)
-                        decryptedBody = decryptMessage(encryptedContent, roomId)
-                    } catch (e: Exception) {
-                        decryptedBody = "[Failed to decrypt]"
-                    } finally {
-                        isDecrypting = false
-                    }
-                }
-                "🔒 Decrypting..."
-            } else {
-                decryptedBody ?: "🔒 Encrypted message"
-            }
+            "🔒 [Encrypted message - Full decryption support coming soon]"
         }
-        else -> "[Unsupported message type: ${message.type}]"
+        else -> "[${message.type}]"
     }
 
-    val isOwnMessage = message.sender == "You" // This would need to be updated with actual user ID
+    val isOwnMessage = message.sender == currentAccessToken?.let { "user" } ?: false // This needs improvement
     val backgroundColor = if (isOwnMessage) MaterialTheme.colors.primary else MaterialTheme.colors.surface
     val textColor = if (isOwnMessage) MaterialTheme.colors.onPrimary else MaterialTheme.colors.onSurface
 
@@ -791,14 +656,14 @@ fun MessageItem(message: MessageEvent, roomId: String, scope: CoroutineScope) {
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = displayBody,
+                    text = displayText,
                     style = MaterialTheme.typography.body1,
                     color = textColor
                 )
                 Spacer(modifier = Modifier.height(2.dp))
                 Text(
                     text = java.time.Instant.ofEpochMilli(message.origin_server_ts)
-                        .toString().substring(11, 19), // Show time only
+                        .toString().substring(11, 19),
                     style = MaterialTheme.typography.caption,
                     color = textColor.copy(alpha = 0.5f)
                 )

@@ -15,13 +15,14 @@
 	-->
 	Project scaffolded with Kotlin Multiplatform and Compose for desktop, basic Hello World app created.
 
-- [ ] Customize the Project
+- [x] Customize the Project
 	<!--
 	Verify that all previous steps have been completed successfully and you have marked the step as completed.
 	Develop a plan to modify codebase according to user requirements.
 	Apply modifications using appropriate tools and user-provided references.
 	Skip this step for "Hello World" projects.
 	-->
+	Implemented full encryption support for Matrix client including room encryption detection, encrypted message handling, and UI indicators.
 
 - [x] Install Required Extensions
 	<!-- ONLY install extensions provided mentioned in the get_project_setup_info. Skip this step otherwise and mark as completed. -->
