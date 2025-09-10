@@ -37,7 +37,20 @@ val json = Json {
     encodeDefaults = true
     isLenient = true
     serializersModule = SerializersModule {
-        contextual(Map::class) { MapSerializer(String.serializer(), JsonElement.serializer()) }
+        // Register contextual serializer for Map to handle internal implementations like SingletonMap
+        contextual(Map::class) { args ->
+            MapSerializer(args[0], args[1])
+        }
+    }
+}
+
+// Utility function to convert Maps to HashMap recursively to avoid serialization issues with SingletonMap
+@Suppress("UNCHECKED_CAST")
+fun convertMapToHashMap(map: Any?): Any? {
+    return when (map) {
+        is Map<*, *> -> map.mapValues { convertMapToHashMap(it.value) }.toMutableMap()
+        is List<*> -> map.map { convertMapToHashMap(it) }
+        else -> map
     }
 }
 
@@ -672,7 +685,8 @@ suspend fun sendMessage(roomId: String, message: String): Boolean {
                             val response = client.put("$currentHomeserver/_matrix/client/v3/sendToDevice/${request.eventType}/${System.currentTimeMillis()}") {
                                 bearerAuth(token)
                                 contentType(ContentType.Application.Json)
-                                setBody(request.body)
+                                @Suppress("UNCHECKED_CAST")
+                                setBody(convertMapToHashMap(request.body) as Map<String, Any>)
                             }
                             if (response.status != HttpStatusCode.OK) {
                                 println("❌ Failed to send to-device request: ${response.status}")
@@ -683,7 +697,8 @@ suspend fun sendMessage(roomId: String, message: String): Boolean {
                             val response = client.post("$currentHomeserver/_matrix/client/v3/keys/upload") {
                                 bearerAuth(token)
                                 contentType(ContentType.Application.Json)
-                                setBody(request.body)
+                                @Suppress("UNCHECKED_CAST")
+                                setBody(convertMapToHashMap(request.body) as Map<String, Any>)
                             }
                             if (response.status != HttpStatusCode.OK) {
                                 println("❌ Failed to upload keys: ${response.status}")
@@ -696,7 +711,9 @@ suspend fun sendMessage(roomId: String, message: String): Boolean {
                             val response = client.post("$currentHomeserver/_matrix/client/v3/keys/query") {
                                 bearerAuth(token)
                                 contentType(ContentType.Application.Json)
-                                setBody(mapOf("device_keys" to request.users.associateWith { emptyMap<String, Any>() }))
+                                @Suppress("UNCHECKED_CAST")
+                                val convertedUsers = convertMapToHashMap(request.users) as Map<String, Any>
+                                setBody(mapOf("device_keys" to convertedUsers.mapValues { emptyMap<String, Any>() }))
                             }
                             if (response.status != HttpStatusCode.OK) {
                                 println("❌ Failed to query keys: ${response.status}")
@@ -730,7 +747,8 @@ suspend fun sendMessage(roomId: String, message: String): Boolean {
                             val response = client.put("$currentHomeserver/_matrix/client/v3/sendToDevice/${request.eventType}/${System.currentTimeMillis()}") {
                                 bearerAuth(token)
                                 contentType(ContentType.Application.Json)
-                                setBody(request.body)
+                                @Suppress("UNCHECKED_CAST")
+                                setBody(convertMapToHashMap(request.body) as Map<String, Any>)
                             }
                             if (response.status != HttpStatusCode.OK) {
                                 println("❌ Failed to send room key: ${response.status}")
@@ -751,7 +769,8 @@ suspend fun sendMessage(roomId: String, message: String): Boolean {
                 val response = client.put("$currentHomeserver/_matrix/client/v3/rooms/$roomId/send/m.room.encrypted/${System.currentTimeMillis()}") {
                     bearerAuth(token)
                     contentType(ContentType.Application.Json)
-                    setBody(encryptedContent)
+                    @Suppress("UNCHECKED_CAST")
+                    setBody(convertMapToHashMap(encryptedContent) as Map<String, Any>)
                 }
                 return response.status == HttpStatusCode.OK
             } catch (e: Exception) {
