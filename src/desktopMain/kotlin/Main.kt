@@ -667,9 +667,10 @@ suspend fun sendMessage(roomId: String, message: String): Boolean {
                 val machine = olmMachine ?: throw Exception("OlmMachine not initialized")
 
                 // Step 1: Get room members
-                val roomMembers = getRoomMembers(roomId)
+                val allRoomMembers = getRoomMembers(roomId)
+                val roomMembers = allRoomMembers.filter { it != currentUserId }
                 val roomMembersCount = roomMembers.size
-                println("🔍 Found $roomMembersCount room members: ${roomMembers.joinToString(", ")}")
+                println("🔍 Found $roomMembersCount room members to share key with: ${roomMembers.joinToString(", ")}")
 
                 // Step 2: Establish Olm sessions with room members
                 val missingSessions = machine.getMissingSessions(roomMembers)
