@@ -239,7 +239,14 @@ data class RoomState(val events: List<StateEvent>)
 data class StateEvent(val type: String, val state_key: String, val sender: String, val content: JsonElement)
 
 @Serializable
-data class SyncResponse(val rooms: Rooms? = null)
+data class SyncResponse(
+    val rooms: Rooms? = null,
+    val toDevice: ToDevice? = null,
+    val nextBatch: String? = null
+)
+
+@Serializable
+data class ToDevice(val events: List<Event> = emptyList())
 
 @Serializable
 data class Rooms(val invite: Map<String, InvitedRoom>? = null, val join: Map<String, JoinedRoom>? = null)
@@ -632,24 +639,75 @@ suspend fun getRoomInvites(): List<RoomInvite> {
     try {
         val response = client.get("$currentHomeserver/_matrix/client/v3/sync") {
             bearerAuth(token)
-            parameter("filter", """{"room":{"state":{"lazy_load_members":true},"timeline":{"lazy_load_members":true},"ephemeral":{"lazy_load_members":true}}}""")
-            parameter("timeout", "0")
+            parameter("filter", """{"room":{"invite":{"state":{"limit":0},"timeline":{"limit":0}},"leave":{"state":{"limit":0},"timeline":{"limit":0}},"join":{"state":{"limit":0},"timeline":{"limit":0}},"knock":{"state":{"limit":0},"timeline":{"limit":0}},"ban":{"state":{"limit":0},"timeline":{"limit":0}}},"presence":{"limit":0},"account_data":{"limit":0},"receipts":{"limit":0}}""")
         }
         if (response.status == HttpStatusCode.OK) {
             val syncResponse = response.body<SyncResponse>()
-            val invitedRooms = mutableListOf<RoomInvite>()
+            val invites = mutableListOf<RoomInvite>()
 
-            syncResponse.rooms?.invite?.forEach { (roomId, inviteState) ->
-                val sender = inviteState.invite_state?.events?.firstOrNull()?.sender ?: "Unknown"
-                invitedRooms.add(RoomInvite(roomId, sender, inviteState.invite_state ?: RoomState(emptyList())))
+            syncResponse.rooms?.invite?.forEach { (roomId, invitedRoom) ->
+                val inviteState = invitedRoom.invite_state
+                if (inviteState != null) {
+                    val sender = inviteState.events.firstOrNull { it.type == "m.room.member" && it.state_key == currentUserId }?.sender ?: ""
+                    invites.add(RoomInvite(roomId, sender, inviteState))
+                }
             }
 
-            return invitedRooms
+            return invites
         }
     } catch (e: Exception) {
-        println("Get invites failed: ${e.message}")
+        println("Get room invites failed: ${e.message}")
     }
     return emptyList()
+}
+
+suspend fun syncAndProcessToDevice(): Boolean {
+    val token = currentAccessToken ?: return false
+    val machine = olmMachine ?: return false
+
+    try {
+        val response = client.get("$currentHomeserver/_matrix/client/v3/sync") {
+            bearerAuth(token)
+            parameter("timeout", "30000") // 30 second timeout to wait for events
+            parameter("filter", """{"room":{"timeline":{"limit":0},"state":{"limit":0},"ephemeral":{"limit":0}},"presence":{"limit":0}}""")
+        }
+
+        if (response.status == HttpStatusCode.OK) {
+            val syncResponse = response.body<SyncResponse>()
+
+            // Extract to-device events
+            val toDeviceEvents = syncResponse.toDevice?.events ?: emptyList()
+            if (toDeviceEvents.isNotEmpty()) {
+                println("📥 Received ${toDeviceEvents.size} to-device events")
+
+                // Convert events to JSON strings
+                val toDeviceEventJsons = toDeviceEvents.map { json.encodeToString(it) }
+
+                // Process with OlmMachine - simplified version
+                val decryptionSettings = DecryptionSettings(senderDeviceTrustRequirement = TrustRequirement.UNTRUSTED)
+                val syncChanges = machine.receiveSyncChanges(
+                    events = toDeviceEventJsons.joinToString(", ", "[", "]"), // Convert to single string
+                    deviceChanges = DeviceLists(emptyList(), emptyList()), // Empty device lists
+                    keyCounts = emptyMap<String, Int>(), // Empty key counts map
+                    unusedFallbackKeys = null,
+                    nextBatchToken = syncResponse.nextBatch ?: "",
+                    decryptionSettings = decryptionSettings
+                )
+
+                println("🔄 Processed sync changes: ${syncChanges.roomKeyInfos.size} room keys received")
+                return true
+            } else {
+                println("📭 No to-device events received")
+                return true
+            }
+        } else {
+            println("❌ Sync failed: ${response.status}")
+            return false
+        }
+    } catch (e: Exception) {
+        println("❌ Sync error: ${e.message}")
+        return false
+    }
 }
 
 suspend fun isRoomEncrypted(roomId: String): Boolean {
@@ -717,6 +775,12 @@ suspend fun getRoomMessages(roomId: String): List<Event> {
 suspend fun sendMessage(roomId: String, message: String): Boolean {
     val token = currentAccessToken ?: return false
     try {
+        // Sync to process any incoming to-device events (room keys) before sending
+        val syncSuccess = syncAndProcessToDevice()
+        if (!syncSuccess) {
+            println("⚠️  Sync failed, but continuing with message send...")
+        }
+
         val isEncrypted = isRoomEncrypted(roomId)
 
         if (isEncrypted) {
