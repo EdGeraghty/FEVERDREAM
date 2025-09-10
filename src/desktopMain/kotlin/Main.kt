@@ -48,6 +48,12 @@ data class Identifier(val type: String = "m.id.user", val user: String)
 data class LoginResponse(val access_token: String)
 
 @Serializable
+data class LoginFlowsResponse(val flows: List<LoginFlow>)
+
+@Serializable
+data class LoginFlow(val type: String)
+
+@Serializable
 data class JoinedRoomsResponse(val joined_rooms: List<String>)
 
 suspend fun login(username: String, password: String, homeserver: String): String? {
@@ -64,6 +70,14 @@ suspend fun login(username: String, password: String, homeserver: String): Strin
         // Clean username - remove @ if present
         val cleanUsername = username.removePrefix("@")
 
+        // First, check what login flows are supported
+        val supportedFlows = getLoginFlows(cleanHomeserver)
+        println("Server supports login flows: $supportedFlows")
+
+        if (!supportedFlows.contains("m.login.password")) {
+            throw Exception("Server does not support password login. Supported flows: $supportedFlows")
+        }
+
         // Try different login formats
         val loginAttempts = listOf(
             // Format 1: Simple user field
@@ -73,7 +87,13 @@ suspend fun login(username: String, password: String, homeserver: String): Strin
             // Format 3: Full user ID with server
             LoginRequest(user = "$cleanUsername:${cleanHomeserver.removePrefix("https://")}", password = password),
             // Format 4: Full user ID with identifier
-            LoginRequestV2(identifier = Identifier(user = "$cleanUsername:${cleanHomeserver.removePrefix("https://")}"), password = password)
+            LoginRequestV2(identifier = Identifier(user = "$cleanUsername:${cleanHomeserver.removePrefix("https://")}"), password = password),
+            // Format 5: Very basic map format (some servers might expect this)
+            mapOf(
+                "type" to "m.login.password",
+                "user" to cleanUsername,
+                "password" to password
+            )
         )
 
         for ((index, loginRequest) in loginAttempts.withIndex()) {
@@ -105,7 +125,7 @@ suspend fun login(username: String, password: String, homeserver: String): Strin
             }
         }
 
-        throw Exception("All login formats failed - server may not support standard Matrix login")
+        throw Exception("All login formats failed - server may have custom requirements")
 
     } catch (e: Exception) {
         println("Login failed: ${e.message}")
@@ -124,6 +144,27 @@ suspend fun getJoinedRooms(homeserver: String, accessToken: String): List<String
         }
     } catch (e: Exception) {
         println("Get rooms failed: ${e.message}")
+    }
+    return emptyList()
+}
+
+suspend fun getLoginFlows(homeserver: String): List<String> {
+    try {
+        val cleanHomeserver = if (homeserver.startsWith("http://")) {
+            homeserver.replace("http://", "https://")
+        } else if (!homeserver.startsWith("https://")) {
+            "https://$homeserver"
+        } else {
+            homeserver
+        }
+
+        val response = client.get("$cleanHomeserver/_matrix/client/v3/login")
+        if (response.status == HttpStatusCode.OK) {
+            val flowsResponse = response.body<LoginFlowsResponse>()
+            return flowsResponse.flows.map { it.type }
+        }
+    } catch (e: Exception) {
+        println("Failed to get login flows: ${e.message}")
     }
     return emptyList()
 }
