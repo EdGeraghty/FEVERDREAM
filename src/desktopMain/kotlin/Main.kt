@@ -1,15 +1,16 @@
 import androidx.compose.desktop.ui.tooling.preview.Preview
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.*
 import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
+import androidx.compose.ui.*
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
-import androidx.compose.runtime.key
+import androidx.compose.ui.window.application
 import androidx.compose.ui.window.Window
+import kotlin.system.exitProcess
 import io.ktor.client.*
 import io.ktor.client.call.*
 import io.ktor.client.engine.cio.CIO
@@ -308,7 +309,7 @@ suspend fun getLoginFlows(homeserver: String): List<String> {
 }
 
 fun main() = application {
-    Window(onCloseRequest = ::exitApplication, title = "FEVERDREAM") {
+    Window(onCloseRequest = { exitProcess(0) }, title = "FEVERDREAM") {
         App()
     }
 }
