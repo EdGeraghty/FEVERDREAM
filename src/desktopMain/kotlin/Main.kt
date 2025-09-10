@@ -896,6 +896,12 @@ suspend fun sendMessage(roomId: String, message: String): Boolean {
             try {
                 val machine = olmMachine ?: throw Exception("OlmMachine not initialized")
 
+                // Ensure room encryption is properly set up
+                val encryptionSetup = ensureRoomEncryption(roomId)
+                if (!encryptionSetup) {
+                    println("⚠️  Failed to set up room encryption, but continuing...")
+                }
+
                 // Step 1: Get room members
                 val allRoomMembers = getRoomMembers(roomId)
                 val roomMembers = allRoomMembers.filter { it != currentUserId }
@@ -1012,60 +1018,41 @@ suspend fun sendMessage(roomId: String, message: String): Boolean {
                 // Step 3: Check if we need to share room key
                 println("🔍 Checking if room key sharing is needed...")
 
-                val encryptionSettings = EncryptionSettings(
-                    algorithm = EventEncryptionAlgorithm.MEGOLM_V1_AES_SHA2,
-                    rotationPeriod = 604800000UL, // 7 days in milliseconds
-                    rotationPeriodMsgs = 100UL, // 100 messages
-                    historyVisibility = HistoryVisibility.SHARED,
-                    onlyAllowTrustedDevices = false,
-                    errorOnVerifiedUserProblem = false
-                )
-
-                // Try to share room key manually first
-                val roomKeyRequests = machine.shareRoomKey(roomId, roomMembers, encryptionSettings)
-                val roomMembersCount2 = roomMembers.size
-                println("🔐 Attempting to share room key with $roomMembersCount2 members")
-                println("🔐 Room key requests returned: ${roomKeyRequests.size}")
-
-                // Step 4: Send room key sharing requests
-                var roomKeyRequestsSent = 0
-                for (request in roomKeyRequests) {
-                    when (request) {
-                        is Request.ToDevice -> {
-                            println("📤 Sending room key to-device request: ${request.eventType}")
-                            val response = client.put("$currentHomeserver/_matrix/client/v3/sendToDevice/${request.eventType}/${System.currentTimeMillis()}") {
-                                bearerAuth(token)
-                                contentType(ContentType.Application.Json)
-                                val body = convertMapToHashMap(request.body)
-                                if (body is Map<*, *>) {
-                                    @Suppress("UNCHECKED_CAST")
-                                    val mapBody = body as Map<String, Any>
-                                    setBody(JsonObject(mapBody.mapValues { anyToJsonElement(it.value) }))
-                                } else if (body is String) {
-                                    setBody(json.parseToJsonElement(body))
-                                }
-                            }
-                            if (response.status == HttpStatusCode.OK) {
-                                roomKeyRequestsSent++
-                                println("✅ Room key sent successfully")
-                            } else {
-                                println("❌ Failed to send room key: ${response.status}")
-                            }
-                        }
-                        else -> {
-                            println("⚠️  Unhandled room key request type: ${request::class.simpleName}")
-                        }
-                    }
+                // First, check if we already have room keys for this room
+                val existingKeys = try {
+                    // Try to encrypt a test message to see if room keys exist
+                    machine.encrypt(roomId, "m.room.message", "{\"msgtype\":\"m.text\",\"body\":\"test\"}")
+                    true // If encryption succeeds, keys exist
+                } catch (e: Exception) {
+                    // If encryption fails, likely due to missing room keys
+                    println("🔑 Room key check failed: ${e.message}")
+                    false
                 }
+                println("🔑 Room key exists for $roomId: $existingKeys")
 
-                // Also check for any pending outgoing requests after room key sharing
-                val pendingRequests = machine.outgoingRequests()
-                if (pendingRequests.isNotEmpty()) {
-                    println("📤 Found ${pendingRequests.size} pending requests after room key sharing")
-                    for (request in pendingRequests) {
+                if (!existingKeys) {
+                    // Only share keys if we don't already have them
+                    val encryptionSettings = EncryptionSettings(
+                        algorithm = EventEncryptionAlgorithm.MEGOLM_V1_AES_SHA2,
+                        rotationPeriod = 604800000UL, // 7 days in milliseconds
+                        rotationPeriodMsgs = 100UL, // 100 messages
+                        historyVisibility = HistoryVisibility.SHARED,
+                        onlyAllowTrustedDevices = false,
+                        errorOnVerifiedUserProblem = false
+                    )
+
+                    // Try to share room key manually first
+                    val roomKeyRequests = machine.shareRoomKey(roomId, roomMembers, encryptionSettings)
+                    val roomMembersCount2 = roomMembers.size
+                    println("🔐 Attempting to share room key with $roomMembersCount2 members")
+                    println("🔐 Room key requests returned: ${roomKeyRequests.size}")
+
+                    // Step 4: Send room key sharing requests
+                    var roomKeyRequestsSent = 0
+                    for (request in roomKeyRequests) {
                         when (request) {
                             is Request.ToDevice -> {
-                                println("📤 Sending pending to-device request: ${request.eventType}")
+                                println("📤 Sending room key to-device request: ${request.eventType}")
                                 val response = client.put("$currentHomeserver/_matrix/client/v3/sendToDevice/${request.eventType}/${System.currentTimeMillis()}") {
                                     bearerAuth(token)
                                     contentType(ContentType.Application.Json)
@@ -1080,40 +1067,76 @@ suspend fun sendMessage(roomId: String, message: String): Boolean {
                                 }
                                 if (response.status == HttpStatusCode.OK) {
                                     roomKeyRequestsSent++
-                                    println("✅ Pending request sent successfully")
+                                    println("✅ Room key sent successfully")
                                 } else {
-                                    println("❌ Failed to send pending request: ${response.status}")
-                                }
-                            }
-                            is Request.KeysQuery -> {
-                                println("📤 Sending keys query request")
-                                val response = client.post("$currentHomeserver/_matrix/client/v3/keys/query") {
-                                    bearerAuth(token)
-                                    contentType(ContentType.Application.Json)
-                                    val convertedUsers = convertMapToHashMap(request.users)
-                                    if (convertedUsers is Map<*, *>) {
-                                        @Suppress("UNCHECKED_CAST")
-                                        val usersMap = convertedUsers as Map<String, Any>
-                                        val deviceKeys = usersMap.mapValues { JsonArray(emptyList<JsonElement>()) }
-                                        setBody(JsonObject(mapOf("device_keys" to JsonObject(deviceKeys))))
-                                    } else {
-                                        setBody(JsonObject(mapOf("device_keys" to JsonObject(emptyMap()))))
-                                    }
-                                }
-                                if (response.status == HttpStatusCode.OK) {
-                                    println("✅ Keys query sent successfully")
-                                } else {
-                                    println("❌ Failed to send keys query: ${response.status}")
+                                    println("❌ Failed to send room key: ${response.status}")
                                 }
                             }
                             else -> {
-                                println("⚠️  Unhandled pending request type: ${request::class.simpleName}")
+                                println("⚠️  Unhandled room key request type: ${request::class.simpleName}")
                             }
                         }
                     }
-                }
 
-                println("📊 Sent $sessionRequestsSent session requests and $roomKeyRequestsSent room key requests")
+                    // Also check for any pending outgoing requests after room key sharing
+                    val pendingRequests = machine.outgoingRequests()
+                    if (pendingRequests.isNotEmpty()) {
+                        println("📤 Found ${pendingRequests.size} pending requests after room key sharing")
+                        for (request in pendingRequests) {
+                            when (request) {
+                                is Request.ToDevice -> {
+                                    println("📤 Sending pending to-device request: ${request.eventType}")
+                                    val response = client.put("$currentHomeserver/_matrix/client/v3/sendToDevice/${request.eventType}/${System.currentTimeMillis()}") {
+                                        bearerAuth(token)
+                                        contentType(ContentType.Application.Json)
+                                        val body = convertMapToHashMap(request.body)
+                                        if (body is Map<*, *>) {
+                                            @Suppress("UNCHECKED_CAST")
+                                            val mapBody = body as Map<String, Any>
+                                            setBody(JsonObject(mapBody.mapValues { anyToJsonElement(it.value) }))
+                                        } else if (body is String) {
+                                            setBody(json.parseToJsonElement(body))
+                                        }
+                                    }
+                                    if (response.status == HttpStatusCode.OK) {
+                                        roomKeyRequestsSent++
+                                        println("✅ Pending request sent successfully")
+                                    } else {
+                                        println("❌ Failed to send pending request: ${response.status}")
+                                    }
+                                }
+                                is Request.KeysQuery -> {
+                                    println("📤 Sending keys query request")
+                                    val response = client.post("$currentHomeserver/_matrix/client/v3/keys/query") {
+                                        bearerAuth(token)
+                                        contentType(ContentType.Application.Json)
+                                        val convertedUsers = convertMapToHashMap(request.users)
+                                        if (convertedUsers is Map<*, *>) {
+                                            @Suppress("UNCHECKED_CAST")
+                                            val usersMap = convertedUsers as Map<String, Any>
+                                            val deviceKeys = usersMap.mapValues { JsonArray(emptyList<JsonElement>()) }
+                                            setBody(JsonObject(mapOf("device_keys" to JsonObject(deviceKeys))))
+                                        } else {
+                                            setBody(JsonObject(mapOf("device_keys" to JsonObject(emptyMap()))))
+                                        }
+                                    }
+                                    if (response.status == HttpStatusCode.OK) {
+                                        println("✅ Keys query sent successfully")
+                                    } else {
+                                        println("❌ Failed to send keys query: ${response.status}")
+                                    }
+                                }
+                                else -> {
+                                    println("⚠️  Unhandled pending request type: ${request::class.simpleName}")
+                                }
+                            }
+                        }
+                    }
+
+                    println("📊 Sent $sessionRequestsSent session requests and $roomKeyRequestsSent room key requests")
+                } else {
+                    println("🔑 Room keys already exist for $roomId, skipping key sharing")
+                }
 
                 // Step 5: Wait for keys to be processed and sync again
                 println("⏳ Waiting for room keys to be processed...")
@@ -1166,6 +1189,47 @@ suspend fun sendMessage(roomId: String, message: String): Boolean {
                                         println("❌ Failed to send encrypt-generated request: ${reqResponse.status}")
                                     }
                                 }
+                                is Request.KeysUpload -> {
+                                    println("📤 Sending keys upload request from encrypt operation")
+                                    val reqResponse = client.post("$currentHomeserver/_matrix/client/v3/keys/upload") {
+                                        bearerAuth(token)
+                                        contentType(ContentType.Application.Json)
+                                        val body = convertMapToHashMap(request.body)
+                                        if (body is Map<*, *>) {
+                                            @Suppress("UNCHECKED_CAST")
+                                            val mapBody = body as Map<String, Any>
+                                            setBody(JsonObject(mapBody.mapValues { anyToJsonElement(it.value) }))
+                                        } else if (body is String) {
+                                            setBody(json.parseToJsonElement(body))
+                                        }
+                                    }
+                                    if (reqResponse.status == HttpStatusCode.OK) {
+                                        println("✅ Keys uploaded successfully from encrypt operation")
+                                    } else {
+                                        println("❌ Failed to upload keys from encrypt operation: ${reqResponse.status}")
+                                    }
+                                }
+                                is Request.KeysQuery -> {
+                                    println("📤 Sending keys query request from encrypt operation")
+                                    val reqResponse = client.post("$currentHomeserver/_matrix/client/v3/keys/query") {
+                                        bearerAuth(token)
+                                        contentType(ContentType.Application.Json)
+                                        val convertedUsers = convertMapToHashMap(request.users)
+                                        if (convertedUsers is Map<*, *>) {
+                                            @Suppress("UNCHECKED_CAST")
+                                            val usersMap = convertedUsers as Map<String, Any>
+                                            val deviceKeys = usersMap.mapValues { JsonArray(emptyList<JsonElement>()) }
+                                            setBody(JsonObject(mapOf("device_keys" to JsonObject(deviceKeys))))
+                                        } else {
+                                            setBody(JsonObject(mapOf("device_keys" to JsonObject(emptyMap()))))
+                                        }
+                                    }
+                                    if (reqResponse.status == HttpStatusCode.OK) {
+                                        println("✅ Keys query sent successfully from encrypt operation")
+                                    } else {
+                                        println("❌ Failed to send keys query from encrypt operation: ${reqResponse.status}")
+                                    }
+                                }
                                 else -> {
                                     println("⚠️  Unhandled encrypt request type: ${request::class.simpleName}")
                                 }
@@ -1196,6 +1260,222 @@ suspend fun sendMessage(roomId: String, message: String): Boolean {
         e.printStackTrace()
     }
     return false
+}
+
+suspend fun ensureRoomEncryption(roomId: String): Boolean {
+    val token = currentAccessToken ?: return false
+    val machine = olmMachine ?: return false
+
+    try {
+        // Check if room is encrypted
+        if (!isRoomEncrypted(roomId)) {
+            println("⚠️  Room $roomId is not encrypted")
+            return false
+        }
+
+        // Get room members
+        val allRoomMembers = getRoomMembers(roomId)
+        val roomMembers = allRoomMembers.filter { it != currentUserId }
+
+        if (roomMembers.isEmpty()) {
+            println("⚠️  No other room members found for $roomId")
+            return false
+        }
+
+        // Check if we have room keys
+        val existingKeys = try {
+            // Try to encrypt a test message to see if room keys exist
+            machine.encrypt(roomId, "m.room.message", "{\"msgtype\":\"m.text\",\"body\":\"test\"}")
+            true // If encryption succeeds, keys exist
+        } catch (e: Exception) {
+            // If encryption fails, likely due to missing room keys
+            println("🔑 Room key check failed: ${e.message}")
+            false
+        }
+        if (!existingKeys) {
+            println("🔑 Setting up encryption for room $roomId")
+
+            // Establish sessions with room members if needed
+            val missingSessions = machine.getMissingSessions(roomMembers)
+            val missingSessionsCount = (missingSessions as? Collection<*>)?.size ?: 0
+
+            if (missingSessionsCount > 0) {
+                println("🔑 Establishing sessions with $missingSessionsCount room members")
+                val sessionRequests = machine.outgoingRequests()
+                for (request in sessionRequests) {
+                    when (request) {
+                        is Request.ToDevice -> {
+                            val response = client.put("$currentHomeserver/_matrix/client/v3/sendToDevice/${request.eventType}/${System.currentTimeMillis()}") {
+                                bearerAuth(token)
+                                contentType(ContentType.Application.Json)
+                                val body = convertMapToHashMap(request.body)
+                                if (body is Map<*, *>) {
+                                    @Suppress("UNCHECKED_CAST")
+                                    val mapBody = body as Map<String, Any>
+                                    setBody(JsonObject(mapBody.mapValues { anyToJsonElement(it.value) }))
+                                } else if (body is String) {
+                                    setBody(json.parseToJsonElement(body))
+                                }
+                            }
+                            if (response.status == HttpStatusCode.OK) {
+                                println("✅ Session established successfully")
+                            }
+                        }
+                        is Request.KeysUpload -> {
+                            val response = client.post("$currentHomeserver/_matrix/client/v3/keys/upload") {
+                                bearerAuth(token)
+                                contentType(ContentType.Application.Json)
+                                val body = convertMapToHashMap(request.body)
+                                if (body is Map<*, *>) {
+                                    @Suppress("UNCHECKED_CAST")
+                                    val mapBody = body as Map<String, Any>
+                                    setBody(JsonObject(mapBody.mapValues { anyToJsonElement(it.value) }))
+                                } else if (body is String) {
+                                    setBody(json.parseToJsonElement(body))
+                                }
+                            }
+                            if (response.status == HttpStatusCode.OK) {
+                                println("✅ Keys uploaded successfully")
+                            }
+                        }
+                        is Request.KeysQuery -> {
+                            val response = client.post("$currentHomeserver/_matrix/client/v3/keys/query") {
+                                bearerAuth(token)
+                                contentType(ContentType.Application.Json)
+                                val convertedUsers = convertMapToHashMap(request.users)
+                                if (convertedUsers is Map<*, *>) {
+                                    @Suppress("UNCHECKED_CAST")
+                                    val usersMap = convertedUsers as Map<String, Any>
+                                    val deviceKeys = usersMap.mapValues { JsonArray(emptyList<JsonElement>()) }
+                                    setBody(JsonObject(mapOf("device_keys" to JsonObject(deviceKeys))))
+                                } else {
+                                    setBody(JsonObject(mapOf("device_keys" to JsonObject(emptyMap()))))
+                                }
+                            }
+                            if (response.status == HttpStatusCode.OK) {
+                                println("✅ Keys query sent successfully")
+                            }
+                        }
+                        else -> {
+                            println("⚠️  Unhandled request type: ${request::class.simpleName}")
+                        }
+                    }
+                }
+            }
+
+            // Wait a bit for sessions to be established
+            kotlinx.coroutines.delay(2000)
+
+            // Now try to share room key
+            val encryptionSettings = EncryptionSettings(
+                algorithm = EventEncryptionAlgorithm.MEGOLM_V1_AES_SHA2,
+                rotationPeriod = 604800000UL,
+                rotationPeriodMsgs = 100UL,
+                historyVisibility = HistoryVisibility.SHARED,
+                onlyAllowTrustedDevices = false,
+                errorOnVerifiedUserProblem = false
+            )
+
+            val roomKeyRequests = machine.shareRoomKey(roomId, roomMembers, encryptionSettings)
+            println("🔐 Room key requests for setup: ${roomKeyRequests.size}")
+
+            // Send room key requests
+            for (request in roomKeyRequests) {
+                when (request) {
+                    is Request.ToDevice -> {
+                        val response = client.put("$currentHomeserver/_matrix/client/v3/sendToDevice/${request.eventType}/${System.currentTimeMillis()}") {
+                            bearerAuth(token)
+                            contentType(ContentType.Application.Json)
+                            val body = convertMapToHashMap(request.body)
+                            if (body is Map<*, *>) {
+                                @Suppress("UNCHECKED_CAST")
+                                val mapBody = body as Map<String, Any>
+                                setBody(JsonObject(mapBody.mapValues { anyToJsonElement(it.value) }))
+                            } else if (body is String) {
+                                setBody(json.parseToJsonElement(body))
+                            }
+                        }
+                        if (response.status == HttpStatusCode.OK) {
+                            println("✅ Room key shared successfully")
+                        }
+                    }
+                    else -> {
+                        println("⚠️  Unhandled room key request type: ${request::class.simpleName}")
+                    }
+                }
+            }
+
+            // Process any remaining requests
+            val remainingRequests = machine.outgoingRequests()
+            for (request in remainingRequests) {
+                when (request) {
+                    is Request.ToDevice -> {
+                        val response = client.put("$currentHomeserver/_matrix/client/v3/sendToDevice/${request.eventType}/${System.currentTimeMillis()}") {
+                            bearerAuth(token)
+                            contentType(ContentType.Application.Json)
+                            val body = convertMapToHashMap(request.body)
+                            if (body is Map<*, *>) {
+                                @Suppress("UNCHECKED_CAST")
+                                val mapBody = body as Map<String, Any>
+                                setBody(JsonObject(mapBody.mapValues { anyToJsonElement(it.value) }))
+                            } else if (body is String) {
+                                setBody(json.parseToJsonElement(body))
+                            }
+                        }
+                        if (response.status == HttpStatusCode.OK) {
+                            println("✅ Remaining request sent successfully")
+                        }
+                    }
+                    is Request.KeysUpload -> {
+                        val response = client.post("$currentHomeserver/_matrix/client/v3/keys/upload") {
+                            bearerAuth(token)
+                            contentType(ContentType.Application.Json)
+                            val body = convertMapToHashMap(request.body)
+                            if (body is Map<*, *>) {
+                                @Suppress("UNCHECKED_CAST")
+                                val mapBody = body as Map<String, Any>
+                                setBody(JsonObject(mapBody.mapValues { anyToJsonElement(it.value) }))
+                            } else if (body is String) {
+                                setBody(json.parseToJsonElement(body))
+                            }
+                        }
+                        if (response.status == HttpStatusCode.OK) {
+                            println("✅ Keys uploaded successfully")
+                        }
+                    }
+                    is Request.KeysQuery -> {
+                        val response = client.post("$currentHomeserver/_matrix/client/v3/keys/query") {
+                            bearerAuth(token)
+                            contentType(ContentType.Application.Json)
+                            val convertedUsers = convertMapToHashMap(request.users)
+                            if (convertedUsers is Map<*, *>) {
+                                @Suppress("UNCHECKED_CAST")
+                                val mapBody = body as Map<String, Any>
+                                setBody(JsonObject(mapBody.mapValues { anyToJsonElement(it.value) }))
+                            } else {
+                                setBody(JsonObject(mapOf("device_keys" to JsonObject(emptyMap()))))
+                            }
+                        }
+                        if (response.status == HttpStatusCode.OK) {
+                            println("✅ Keys query sent successfully")
+                        }
+                    }
+                    else -> {
+                        println("⚠️  Unhandled remaining request type: ${request::class.simpleName}")
+                    }
+                }
+            }
+
+            println("✅ Room encryption setup completed for $roomId")
+            return true
+        } else {
+            println("🔑 Room keys already exist for $roomId")
+            return true
+        }
+    } catch (e: Exception) {
+        println("❌ Failed to ensure room encryption for $roomId: ${e.message}")
+        return false
+    }
 }
 
 suspend fun startPeriodicSync() {
@@ -1607,6 +1887,15 @@ fun ChatWindow(roomId: String, onClose: () -> Unit) {
             syncAndProcessToDevice()
             messages = getRoomMessages(roomId)
             isEncrypted = isRoomEncrypted(roomId)
+
+            // If room is encrypted, ensure encryption is properly set up
+            if (isEncrypted) {
+                ensureRoomEncryption(roomId)
+                // Sync again after setting up encryption
+                syncAndProcessToDevice()
+                messages = getRoomMessages(roomId)
+            }
+
             isLoading = false
         }
     }
