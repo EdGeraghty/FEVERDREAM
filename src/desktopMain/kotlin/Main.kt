@@ -311,8 +311,18 @@ suspend fun login(username: String, password: String, homeserver: String): Login
                 throw Exception("Login failed: ${response.status} - ${response.status.description}")
             }
         } catch (e: Exception) {
+            println("Login failed on homeserver $finalHomeserver: ${e.message}")
+
+            // If the login failed and we discovered a homeserver (not using the original domain),
+            // and the user didn't provide a specific homeserver, don't try fallback
+            val originalDomainHomeserver = "https://${userId.split(":").getOrNull(1) ?: ""}"
+            if (actualHomeserver != originalDomainHomeserver && cleanHomeserver.isBlank()) {
+                println("Not attempting fallback since homeserver was auto-discovered and user didn't specify one")
+                throw e
+            }
+
             // If the extracted homeserver fails and it's different from the provided one, try the provided homeserver
-            if (actualHomeserver != cleanHomeserver && e.message?.contains("400") == true && cleanHomeserver.isNotBlank()) {
+            if (actualHomeserver != cleanHomeserver && cleanHomeserver.isNotBlank() && cleanHomeserver != "https://") {
                 println("Login failed on discovered homeserver $actualHomeserver, trying provided homeserver: $cleanHomeserver")
                 currentHomeserver = cleanHomeserver
 
