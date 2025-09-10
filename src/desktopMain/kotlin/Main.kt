@@ -685,8 +685,12 @@ suspend fun sendMessage(roomId: String, message: String): Boolean {
                             val response = client.put("$currentHomeserver/_matrix/client/v3/sendToDevice/${request.eventType}/${System.currentTimeMillis()}") {
                                 bearerAuth(token)
                                 contentType(ContentType.Application.Json)
-                                @Suppress("UNCHECKED_CAST")
-                                setBody(convertMapToHashMap(request.body) as Map<String, Any>)
+                                val body = convertMapToHashMap(request.body)
+                                if (body is Map<*, *>) {
+                                    setBody(body as Map<String, Any>)
+                                } else if (body is String) {
+                                    setBody(json.parseToJsonElement(body))
+                                }
                             }
                             if (response.status != HttpStatusCode.OK) {
                                 println("❌ Failed to send to-device request: ${response.status}")
@@ -697,8 +701,12 @@ suspend fun sendMessage(roomId: String, message: String): Boolean {
                             val response = client.post("$currentHomeserver/_matrix/client/v3/keys/upload") {
                                 bearerAuth(token)
                                 contentType(ContentType.Application.Json)
-                                @Suppress("UNCHECKED_CAST")
-                                setBody(convertMapToHashMap(request.body) as Map<String, Any>)
+                                val body = convertMapToHashMap(request.body)
+                                if (body is Map<*, *>) {
+                                    setBody(body as Map<String, Any>)
+                                } else if (body is String) {
+                                    setBody(json.parseToJsonElement(body))
+                                }
                             }
                             if (response.status != HttpStatusCode.OK) {
                                 println("❌ Failed to upload keys: ${response.status}")
@@ -711,9 +719,13 @@ suspend fun sendMessage(roomId: String, message: String): Boolean {
                             val response = client.post("$currentHomeserver/_matrix/client/v3/keys/query") {
                                 bearerAuth(token)
                                 contentType(ContentType.Application.Json)
-                                @Suppress("UNCHECKED_CAST")
-                                val convertedUsers = convertMapToHashMap(request.users) as Map<String, Any>
-                                setBody(mapOf("device_keys" to convertedUsers.mapValues { emptyMap<String, Any>() }))
+                                val convertedUsers = convertMapToHashMap(request.users)
+                                if (convertedUsers is Map<*, *>) {
+                                    val usersMap = convertedUsers as Map<String, Any>
+                                    setBody(mapOf("device_keys" to usersMap.mapValues { emptyMap<String, Any>() }))
+                                } else {
+                                    setBody(mapOf("device_keys" to emptyMap<String, Any>()))
+                                }
                             }
                             if (response.status != HttpStatusCode.OK) {
                                 println("❌ Failed to query keys: ${response.status}")
@@ -747,8 +759,12 @@ suspend fun sendMessage(roomId: String, message: String): Boolean {
                             val response = client.put("$currentHomeserver/_matrix/client/v3/sendToDevice/${request.eventType}/${System.currentTimeMillis()}") {
                                 bearerAuth(token)
                                 contentType(ContentType.Application.Json)
-                                @Suppress("UNCHECKED_CAST")
-                                setBody(convertMapToHashMap(request.body) as Map<String, Any>)
+                                val body = convertMapToHashMap(request.body)
+                                if (body is Map<*, *>) {
+                                    setBody(body as Map<String, Any>)
+                                } else if (body is String) {
+                                    setBody(json.parseToJsonElement(body))
+                                }
                             }
                             if (response.status != HttpStatusCode.OK) {
                                 println("❌ Failed to send room key: ${response.status}")
