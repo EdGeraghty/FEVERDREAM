@@ -298,16 +298,51 @@ suspend fun login(username: String, password: String, homeserver: String): Login
                 password = password
             )
 
+            println("Sending login request: ${Json.encodeToString(loginRequest)}")
+
             val response = client.post("$finalHomeserver/_matrix/client/v3/login") {
                 contentType(ContentType.Application.Json)
                 setBody(loginRequest)
             }
+
+            println("Login response status: ${response.status}")
 
             if (response.status == HttpStatusCode.OK) {
                 val loginResponse = response.body<LoginResponse>()
                 currentAccessToken = loginResponse.access_token
                 return loginResponse
             } else {
+                // Try to get error details from response
+                val errorText = response.body<String>()
+                println("Login error response: $errorText")
+
+                // If it's a 400 error, try the older login format as fallback
+                if (response.status == HttpStatusCode.BadRequest) {
+                    println("Trying older login format...")
+                    try {
+                        val oldLoginRequest = LoginRequest(
+                            user = userId,
+                            password = password
+                        )
+
+                        val oldResponse = client.post("$finalHomeserver/_matrix/client/v3/login") {
+                            contentType(ContentType.Application.Json)
+                            setBody(oldLoginRequest)
+                        }
+
+                        if (oldResponse.status == HttpStatusCode.OK) {
+                            val loginResponse = oldResponse.body<LoginResponse>()
+                            currentAccessToken = loginResponse.access_token
+                            println("Login successful with older format")
+                            return loginResponse
+                        } else {
+                            println("Older login format also failed: ${oldResponse.status}")
+                        }
+                    } catch (oldException: Exception) {
+                        println("Older login format failed: ${oldException.message}")
+                    }
+                }
+
                 throw Exception("Login failed: ${response.status} - ${response.status.description}")
             }
         } catch (e: Exception) {
