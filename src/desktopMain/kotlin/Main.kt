@@ -150,7 +150,7 @@ fun encryptMessageCustom(message: String, deviceId: String): String? {
         val iv = cipher.iv
         val combined = iv + ciphertext
 
-        java.util.Base64.getUrlEncoder().encodeToString(combined)
+        java.util.Base64.getEncoder().encodeToString(combined)
     } catch (e: Exception) {
         println("❌ Custom encryption failed: ${e.message}")
         null
@@ -165,13 +165,14 @@ fun decryptMessageCustom(encryptedMessage: String, deviceId: String): String? {
 
         // Try to decode with different base64 variants for maximum compatibility
         val combined = try {
-            java.util.Base64.getUrlDecoder().decode(encryptedMessage)
+            // Try standard base64 first (Matrix spec compliant)
+            java.util.Base64.getDecoder().decode(encryptedMessage)
         } catch (e: Exception) {
             try {
-                // Fallback to standard base64
-                java.util.Base64.getDecoder().decode(encryptedMessage)
+                // Fallback to URL-safe base64
+                java.util.Base64.getUrlDecoder().decode(encryptedMessage)
             } catch (e2: Exception) {
-                // Handle URL-safe base64 with padding issues or other variants
+                // Handle base64 with padding issues or other variants
                 val cleanedMessage = encryptedMessage
                     .replace('-', '+')
                     .replace('_', '/')
@@ -645,7 +646,7 @@ suspend fun sendMessage(roomId: String, message: String): Boolean {
                     val encryptedContent = EncryptedSendMessageRequest(
                         ciphertext = encryptedText,
                         device_id = deviceId,
-                        sender_key = java.util.Base64.getUrlEncoder().encodeToString(identityKeyPair?.public?.encoded ?: byteArrayOf()),
+                        sender_key = java.util.Base64.getEncoder().encodeToString(identityKeyPair?.public?.encoded ?: byteArrayOf()),
                         session_id = deviceId
                     )
 
