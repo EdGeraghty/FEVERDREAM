@@ -908,6 +908,7 @@ suspend fun sendMessage(roomId: String, message: String): Boolean {
                 val roomMembersCount = roomMembers.size
                 println("🔍 Found $roomMembersCount room members to share key with: ${roomMembers.joinToString(", ")}")
                 println("🔍 Current user ID: $currentUserId")
+                println("🔍 All room members: ${allRoomMembers.joinToString(", ")}")
 
                 // Validate user ID formats
                 val validUserIds = roomMembers.filter { it.startsWith("@") && it.contains(":") }
@@ -930,6 +931,8 @@ suspend fun sendMessage(roomId: String, message: String): Boolean {
                 val missingSessions = machine.getMissingSessions(roomMembers)
                 val missingSessionsCount = (missingSessions as? Collection<*>)?.size ?: 0
                 println("🔑 Missing sessions for $missingSessionsCount users")
+                println("🔑 Missing sessions details: $missingSessions")
+                println("🔑 Total room members: ${roomMembers.size}")
 
                 var sessionRequestsSent = 0
                 if (missingSessionsCount > 0) {
@@ -1026,10 +1029,15 @@ suspend fun sendMessage(roomId: String, message: String): Boolean {
                 )
 
                 // Try to share room key with all room members
+                println("🔐 About to call shareRoomKey with roomId: $roomId")
+                println("🔐 Room members for key sharing: ${roomMembers.joinToString(", ")}")
                 val roomKeyRequests = machine.shareRoomKey(roomId, roomMembers, encryptionSettings)
                 val roomMembersCount2 = roomMembers.size
                 println("🔐 Attempting to share room key with $roomMembersCount2 members")
                 println("🔐 Room key requests returned: ${roomKeyRequests.size}")
+                if (roomKeyRequests.isEmpty()) {
+                    println("⚠️  No room key requests generated! This means keys may already exist or there's an issue.")
+                }
 
                 // Step 4: Send room key sharing requests
                 var roomKeyRequestsSent = 0
@@ -1893,7 +1901,7 @@ fun MessageItem(message: Event) {
         else -> "[${message.type}]"
     }
 
-    val isOwnMessage = message.sender.contains(currentAccessToken?.take(8) ?: "")
+    val isOwnMessage = message.sender == currentUserId
     val backgroundColor = if (isOwnMessage) MaterialTheme.colors.primary else MaterialTheme.colors.surface
     val textColor = if (isOwnMessage) MaterialTheme.colors.onPrimary else MaterialTheme.colors.onSurface
 
