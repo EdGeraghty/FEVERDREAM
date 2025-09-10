@@ -57,6 +57,8 @@ val client = HttpClient(Apache) {
 }
 
 // Global encryption state
+// NOTE: Currently using jOlm (deprecated, superseded by vodozemac)
+// TODO: Migrate to vodozemac when Kotlin bindings become available
 var olmAccount: Account? = null
 var olmSessions = mutableMapOf<String, Session>() // deviceId -> Session
 var outboundGroupSessions = mutableMapOf<String, OutboundGroupSession>() // roomId -> OutboundGroupSession

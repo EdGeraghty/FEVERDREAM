@@ -22,7 +22,10 @@
 	Apply modifications using appropriate tools and user-provided references.
 	Skip this step for "Hello World" projects.
 	-->
-	Successfully replaced custom encryption implementation with proper Olm/Megolm encryption using jOlm library. Implemented room encryption detection, Megolm group encryption for sending messages, and UI indicators for encrypted rooms. All compilation errors resolved and build successful.
+	Implemented Olm/Megolm encryption using jOlm library (currently the only available Kotlin option).
+	Note: jOlm is deprecated and superseded by vodozemac. Vodozemac Kotlin bindings are not yet available.
+	Room encryption detection, Megolm group encryption for sending messages, and UI indicators for encrypted rooms implemented.
+	All compilation errors resolved and build successful.
 
 - [x] Install Required Extensions
 	<!-- ONLY install extensions provided mentioned in the get_project_setup_info. Skip this step otherwise and mark as completed. -->

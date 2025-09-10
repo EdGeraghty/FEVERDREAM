@@ -29,7 +29,9 @@ kotlin {
                 implementation("io.ktor:ktor-client-content-negotiation:2.3.0")
                 implementation("io.ktor:ktor-serialization-kotlinx-json:2.3.0")
 
-                // Encryption support - Olm/Megolm implementation
+                // Note: jOlm is deprecated (superseded by vodozemac). 
+                // Vodozemac Kotlin bindings are not yet available.
+                // Consider migrating when official bindings become available.
                 implementation("io.github.brevilo:jolm:1.1.1")
             }
         }
