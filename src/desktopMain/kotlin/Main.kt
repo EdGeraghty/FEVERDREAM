@@ -65,6 +65,19 @@ fun convertMapToHashMap(map: Any?): Any? {
     }
 }
 
+// Utility function to convert Any to JsonElement for serialization
+fun anyToJsonElement(value: Any?): JsonElement {
+    return when (value) {
+        null -> JsonNull
+        is String -> JsonPrimitive(value)
+        is Number -> JsonPrimitive(value)
+        is Boolean -> JsonPrimitive(value)
+        is Map<*, *> -> JsonObject(value.map { it.key.toString() to anyToJsonElement(it.value) }.toMap())
+        is List<*> -> JsonArray(value.map { anyToJsonElement(it) })
+        else -> JsonPrimitive(value.toString()) // fallback for other types
+    }
+}
+
 val client = HttpClient(Apache) {
     install(ContentNegotiation) {
         json(json)
@@ -700,7 +713,8 @@ suspend fun sendMessage(roomId: String, message: String): Boolean {
                                 val body = convertMapToHashMap(request.body)
                                 if (body is Map<*, *>) {
                                     @Suppress("UNCHECKED_CAST")
-                                    setBody(body as Map<String, Any>)
+                                    val mapBody = body as Map<String, Any>
+                                    setBody(JsonObject(mapBody.mapValues { anyToJsonElement(it.value) }))
                                 } else if (body is String) {
                                     setBody(json.parseToJsonElement(body))
                                 }
@@ -717,7 +731,8 @@ suspend fun sendMessage(roomId: String, message: String): Boolean {
                                 val body = convertMapToHashMap(request.body)
                                 if (body is Map<*, *>) {
                                     @Suppress("UNCHECKED_CAST")
-                                    setBody(body as Map<String, Any>)
+                                    val mapBody = body as Map<String, Any>
+                                    setBody(JsonObject(mapBody.mapValues { anyToJsonElement(it.value) }))
                                 } else if (body is String) {
                                     setBody(json.parseToJsonElement(body))
                                 }
@@ -737,9 +752,10 @@ suspend fun sendMessage(roomId: String, message: String): Boolean {
                                 if (convertedUsers is Map<*, *>) {
                                     @Suppress("UNCHECKED_CAST")
                                     val usersMap = convertedUsers as Map<String, Any>
-                                    setBody(mapOf("device_keys" to usersMap.mapValues { emptyMap<String, Any>() }))
+                                    val deviceKeys = usersMap.mapValues { JsonObject(emptyMap()) }
+                                    setBody(JsonObject(mapOf("device_keys" to JsonObject(deviceKeys))))
                                 } else {
-                                    setBody(mapOf("device_keys" to emptyMap<String, Any>()))
+                                    setBody(JsonObject(mapOf("device_keys" to JsonObject(emptyMap()))))
                                 }
                             }
                             if (response.status != HttpStatusCode.OK) {
@@ -777,7 +793,8 @@ suspend fun sendMessage(roomId: String, message: String): Boolean {
                                 val body = convertMapToHashMap(request.body)
                                 if (body is Map<*, *>) {
                                     @Suppress("UNCHECKED_CAST")
-                                    setBody(body as Map<String, Any>)
+                                    val mapBody = body as Map<String, Any>
+                                    setBody(JsonObject(mapBody.mapValues { anyToJsonElement(it.value) }))
                                 } else if (body is String) {
                                     setBody(json.parseToJsonElement(body))
                                 }
@@ -801,7 +818,7 @@ suspend fun sendMessage(roomId: String, message: String): Boolean {
                 val response = client.put("$currentHomeserver/_matrix/client/v3/rooms/$roomId/send/m.room.encrypted/${System.currentTimeMillis()}") {
                     bearerAuth(token)
                     contentType(ContentType.Application.Json)
-                    setBody(encryptedContent)
+                    setBody(json.parseToJsonElement(encryptedContent))
                 }
                 return response.status == HttpStatusCode.OK
             } catch (e: Exception) {
@@ -830,7 +847,7 @@ suspend fun acceptRoomInvite(roomId: String): Boolean {
         val response = client.post("$currentHomeserver/_matrix/client/v3/rooms/$roomId/join") {
             bearerAuth(token)
             contentType(ContentType.Application.Json)
-            setBody(mapOf<String, String>())
+            setBody(JsonObject(emptyMap()))
         }
         return response.status == HttpStatusCode.OK
     } catch (e: Exception) {
@@ -845,7 +862,7 @@ suspend fun rejectRoomInvite(roomId: String): Boolean {
         val response = client.post("$currentHomeserver/_matrix/client/v3/rooms/$roomId/leave") {
             bearerAuth(token)
             contentType(ContentType.Application.Json)
-            setBody(mapOf<String, String>())
+            setBody(JsonObject(emptyMap()))
         }
         return response.status == HttpStatusCode.OK
     } catch (e: Exception) {
