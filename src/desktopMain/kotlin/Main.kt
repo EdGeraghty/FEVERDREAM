@@ -696,13 +696,13 @@ suspend fun syncAndProcessToDevice(): Boolean {
             if (toDeviceEvents.isNotEmpty()) {
                 println("📥 Received ${toDeviceEvents.size} to-device events")
 
-                // Convert events to JSON strings
+                // Convert events to JSON strings - each event should be a separate string
                 val toDeviceEventJsons = toDeviceEvents.map { json.encodeToString(it) }
 
-                // Process with OlmMachine - simplified version
+                // Process with OlmMachine - pass as array of strings
                 val decryptionSettings = DecryptionSettings(senderDeviceTrustRequirement = TrustRequirement.UNTRUSTED)
                 val syncChanges = machine.receiveSyncChanges(
-                    events = toDeviceEventJsons.joinToString(", ", "[", "]"), // Convert to single string
+                    events = toDeviceEventJsons.joinToString(",", "[", "]"), // Array format
                     deviceChanges = DeviceLists(emptyList(), emptyList()), // Empty device lists
                     keyCounts = emptyMap<String, Int>(), // Empty key counts map
                     unusedFallbackKeys = null,
@@ -725,6 +725,7 @@ suspend fun syncAndProcessToDevice(): Boolean {
         }
     } catch (e: Exception) {
         println("❌ Sync error: ${e.message}")
+        e.printStackTrace()
         return false
     }
 }
@@ -837,13 +838,37 @@ suspend fun sendMessage(roomId: String, message: String): Boolean {
                 val roomMembersCount = roomMembers.size
                 println("🔍 Found $roomMembersCount room members to share key with: ${roomMembers.joinToString(", ")}")
 
-                // Step 2: Establish Olm sessions with room members
+                if (roomMembers.isEmpty()) {
+                    println("⚠️  No other room members found, sending unencrypted message")
+                    val response = client.put("$currentHomeserver/_matrix/client/v3/rooms/$roomId/send/m.room.message/${System.currentTimeMillis()}") {
+                        bearerAuth(token)
+                        contentType(ContentType.Application.Json)
+                        setBody(SendMessageRequest(body = message))
+                    }
+                    return response.status == HttpStatusCode.OK
+                }
+
+                // Step 2: Query device keys for room members
+                println("🔑 Querying device keys for room members...")
+                val keysQueryResponse = client.post("$currentHomeserver/_matrix/client/v3/keys/query") {
+                    bearerAuth(token)
+                    contentType(ContentType.Application.Json)
+                    setBody(JsonObject(mapOf("device_keys" to JsonObject(roomMembers.associateWith { JsonObject(emptyMap()) }))))
+                }
+
+                if (keysQueryResponse.status != HttpStatusCode.OK) {
+                    println("❌ Failed to query device keys: ${keysQueryResponse.status}")
+                    return false
+                }
+
+                // Step 3: Establish Olm sessions with room members
                 val missingSessions = machine.getMissingSessions(roomMembers)
                 val missingSessionsCount = (missingSessions as? Collection<*>)?.size ?: 0
                 println("🔑 Missing sessions for $missingSessionsCount users")
 
-                // Step 3: Send any outgoing requests to establish sessions
+                // Step 4: Send any outgoing requests to establish sessions
                 val sessionRequests = machine.outgoingRequests()
+                var sessionRequestsSent = 0
                 for (request in sessionRequests) {
                     when (request) {
                         is Request.ToDevice -> {
@@ -860,7 +885,10 @@ suspend fun sendMessage(roomId: String, message: String): Boolean {
                                     setBody(json.parseToJsonElement(body))
                                 }
                             }
-                            if (response.status != HttpStatusCode.OK) {
+                            if (response.status == HttpStatusCode.OK) {
+                                sessionRequestsSent++
+                                println("✅ Session request sent successfully")
+                            } else {
                                 println("❌ Failed to send to-device request: ${response.status}")
                             }
                         }
@@ -878,7 +906,9 @@ suspend fun sendMessage(roomId: String, message: String): Boolean {
                                     setBody(json.parseToJsonElement(body))
                                 }
                             }
-                            if (response.status != HttpStatusCode.OK) {
+                            if (response.status == HttpStatusCode.OK) {
+                                println("✅ Keys uploaded successfully")
+                            } else {
                                 println("❌ Failed to upload keys: ${response.status}")
                             }
                         }
@@ -899,7 +929,9 @@ suspend fun sendMessage(roomId: String, message: String): Boolean {
                                     setBody(JsonObject(mapOf("device_keys" to JsonObject(emptyMap()))))
                                 }
                             }
-                            if (response.status != HttpStatusCode.OK) {
+                            if (response.status == HttpStatusCode.OK) {
+                                println("✅ Keys query sent successfully")
+                            } else {
                                 println("❌ Failed to query keys: ${response.status}")
                             }
                         }
@@ -909,7 +941,7 @@ suspend fun sendMessage(roomId: String, message: String): Boolean {
                     }
                 }
 
-                // Step 4: Share room key with room members
+                // Step 5: Share room key with room members
                 val encryptionSettings = EncryptionSettings(
                     algorithm = EventEncryptionAlgorithm.MEGOLM_V1_AES_SHA2,
                     rotationPeriod = 604800000UL, // 7 days in milliseconds
@@ -923,7 +955,8 @@ suspend fun sendMessage(roomId: String, message: String): Boolean {
                 val roomMembersCount2 = roomMembers.size
                 println("🔐 Sharing room key with $roomMembersCount2 members")
 
-                // Step 5: Send room key sharing requests
+                // Step 6: Send room key sharing requests
+                var roomKeyRequestsSent = 0
                 for (request in roomKeyRequests) {
                     when (request) {
                         is Request.ToDevice -> {
@@ -940,7 +973,10 @@ suspend fun sendMessage(roomId: String, message: String): Boolean {
                                     setBody(json.parseToJsonElement(body))
                                 }
                             }
-                            if (response.status != HttpStatusCode.OK) {
+                            if (response.status == HttpStatusCode.OK) {
+                                roomKeyRequestsSent++
+                                println("✅ Room key sent successfully")
+                            } else {
                                 println("❌ Failed to send room key: ${response.status}")
                             }
                         }
@@ -950,7 +986,13 @@ suspend fun sendMessage(roomId: String, message: String): Boolean {
                     }
                 }
 
-                // Step 6: Encrypt the message
+                println("📊 Sent $sessionRequestsSent session requests and $roomKeyRequestsSent room key requests")
+
+                // Step 7: Wait a bit for the room keys to be processed by recipients
+                println("⏳ Waiting for room keys to be processed...")
+                kotlinx.coroutines.delay(2000) // Wait 2 seconds
+
+                // Step 8: Encrypt the message
                 val messageContent = json.encodeToString(MessageContent("m.text", message))
                 val encryptedContent = machine.encrypt(roomId, "m.room.message", messageContent)
 
@@ -961,7 +1003,14 @@ suspend fun sendMessage(roomId: String, message: String): Boolean {
                     contentType(ContentType.Application.Json)
                     setBody(json.parseToJsonElement(encryptedContent))
                 }
-                return response.status == HttpStatusCode.OK
+
+                if (response.status == HttpStatusCode.OK) {
+                    println("✅ Encrypted message sent successfully")
+                    return true
+                } else {
+                    println("❌ Failed to send encrypted message: ${response.status}")
+                    return false
+                }
             } catch (e: Exception) {
                 println("❌ Matrix SDK Crypto encryption failed: ${e.message}")
                 e.printStackTrace()
@@ -980,6 +1029,25 @@ suspend fun sendMessage(roomId: String, message: String): Boolean {
         e.printStackTrace()
     }
     return false
+}
+
+suspend fun startPeriodicSync() {
+    while (true) {
+        try {
+            // Sync every 30 seconds to keep receiving to-device events
+            kotlinx.coroutines.delay(30000)
+            if (currentAccessToken != null && olmMachine != null) {
+                val syncResult = syncAndProcessToDevice()
+                if (syncResult) {
+                    println("🔄 Periodic sync completed successfully")
+                } else {
+                    println("⚠️  Periodic sync failed")
+                }
+            }
+        } catch (e: Exception) {
+            println("❌ Periodic sync error: ${e.message}")
+        }
+    }
 }
 
 suspend fun acceptRoomInvite(roomId: String): Boolean {
@@ -1064,6 +1132,13 @@ fun App() {
             } finally {
                 isRestoringSession = false
                 isLoading = false
+
+                // Start periodic sync for to-device events
+                if (currentAccessToken != null && olmMachine != null) {
+                    scope.launch {
+                        startPeriodicSync()
+                    }
+                }
             }
         }
     }
@@ -1100,6 +1175,12 @@ fun App() {
                             try {
                                 val response = login(username, password, homeserver)
                                 loginResponse = response
+                                // Start periodic sync for to-device events after successful login
+                                if (currentAccessToken != null && olmMachine != null) {
+                                    scope.launch {
+                                        startPeriodicSync()
+                                    }
+                                }
                             } catch (e: Exception) {
                                 error = e.message ?: "Login failed. Please try again."
                             } finally {
