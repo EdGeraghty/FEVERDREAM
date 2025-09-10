@@ -977,7 +977,7 @@ suspend fun sendMessage(roomId: String, message: String): Boolean {
                             is Request.KeysQuery -> {
                                 val requestUsersMap = request.users as? Map<*, *>
                                 val userCount = requestUsersMap?.size ?: 0
-                                println("📤 Sending keys query request for $userCount users")
+                                                                println(" Sending keys query request")
                                 val response = client.post("$currentHomeserver/_matrix/client/v3/keys/query") {
                                     bearerAuth(token)
                                     contentType(ContentType.Application.Json)
@@ -1009,7 +1009,9 @@ suspend fun sendMessage(roomId: String, message: String): Boolean {
                     println("📊 Sent $sessionRequestsSent session/key requests")
                 }
 
-                // Step 3: Share room key with room members
+                // Step 3: Check if we need to share room key
+                println("🔍 Checking if room key sharing is needed...")
+
                 val encryptionSettings = EncryptionSettings(
                     algorithm = EventEncryptionAlgorithm.MEGOLM_V1_AES_SHA2,
                     rotationPeriod = 604800000UL, // 7 days in milliseconds
@@ -1019,9 +1021,11 @@ suspend fun sendMessage(roomId: String, message: String): Boolean {
                     errorOnVerifiedUserProblem = false
                 )
 
+                // Try to share room key manually first
                 val roomKeyRequests = machine.shareRoomKey(roomId, roomMembers, encryptionSettings)
                 val roomMembersCount2 = roomMembers.size
-                println("🔐 Sharing room key with $roomMembersCount2 members")
+                println("🔐 Attempting to share room key with $roomMembersCount2 members")
+                println("🔐 Room key requests returned: ${roomKeyRequests.size}")
 
                 // Step 4: Send room key sharing requests
                 var roomKeyRequestsSent = 0
@@ -1054,6 +1058,61 @@ suspend fun sendMessage(roomId: String, message: String): Boolean {
                     }
                 }
 
+                // Also check for any pending outgoing requests after room key sharing
+                val pendingRequests = machine.outgoingRequests()
+                if (pendingRequests.isNotEmpty()) {
+                    println("📤 Found ${pendingRequests.size} pending requests after room key sharing")
+                    for (request in pendingRequests) {
+                        when (request) {
+                            is Request.ToDevice -> {
+                                println("📤 Sending pending to-device request: ${request.eventType}")
+                                val response = client.put("$currentHomeserver/_matrix/client/v3/sendToDevice/${request.eventType}/${System.currentTimeMillis()}") {
+                                    bearerAuth(token)
+                                    contentType(ContentType.Application.Json)
+                                    val body = convertMapToHashMap(request.body)
+                                    if (body is Map<*, *>) {
+                                        @Suppress("UNCHECKED_CAST")
+                                        val mapBody = body as Map<String, Any>
+                                        setBody(JsonObject(mapBody.mapValues { anyToJsonElement(it.value) }))
+                                    } else if (body is String) {
+                                        setBody(json.parseToJsonElement(body))
+                                    }
+                                }
+                                if (response.status == HttpStatusCode.OK) {
+                                    roomKeyRequestsSent++
+                                    println("✅ Pending request sent successfully")
+                                } else {
+                                    println("❌ Failed to send pending request: ${response.status}")
+                                }
+                            }
+                            is Request.KeysQuery -> {
+                                println("📤 Sending keys query request")
+                                val response = client.post("$currentHomeserver/_matrix/client/v3/keys/query") {
+                                    bearerAuth(token)
+                                    contentType(ContentType.Application.Json)
+                                    val convertedUsers = convertMapToHashMap(request.users)
+                                    if (convertedUsers is Map<*, *>) {
+                                        @Suppress("UNCHECKED_CAST")
+                                        val usersMap = convertedUsers as Map<String, Any>
+                                        val deviceKeys = usersMap.mapValues { JsonArray(emptyList<JsonElement>()) }
+                                        setBody(JsonObject(mapOf("device_keys" to JsonObject(deviceKeys))))
+                                    } else {
+                                        setBody(JsonObject(mapOf("device_keys" to JsonObject(emptyMap()))))
+                                    }
+                                }
+                                if (response.status == HttpStatusCode.OK) {
+                                    println("✅ Keys query sent successfully")
+                                } else {
+                                    println("❌ Failed to send keys query: ${response.status}")
+                                }
+                            }
+                            else -> {
+                                println("⚠️  Unhandled pending request type: ${request::class.simpleName}")
+                            }
+                        }
+                    }
+                }
+
                 println("📊 Sent $sessionRequestsSent session requests and $roomKeyRequestsSent room key requests")
 
                 // Step 5: Wait for keys to be processed and sync again
@@ -1080,6 +1139,40 @@ suspend fun sendMessage(roomId: String, message: String): Boolean {
 
                 if (response.status == HttpStatusCode.OK) {
                     println("✅ Encrypted message sent successfully")
+
+                    // Check for any requests generated by the encrypt operation
+                    val encryptRequests = machine.outgoingRequests()
+                    if (encryptRequests.isNotEmpty()) {
+                        println("📤 Found ${encryptRequests.size} requests generated by encrypt operation")
+                        for (request in encryptRequests) {
+                            when (request) {
+                                is Request.ToDevice -> {
+                                    println("📤 Sending encrypt-generated to-device request: ${request.eventType}")
+                                    val reqResponse = client.put("$currentHomeserver/_matrix/client/v3/sendToDevice/${request.eventType}/${System.currentTimeMillis()}") {
+                                        bearerAuth(token)
+                                        contentType(ContentType.Application.Json)
+                                        val body = convertMapToHashMap(request.body)
+                                        if (body is Map<*, *>) {
+                                            @Suppress("UNCHECKED_CAST")
+                                            val mapBody = body as Map<String, Any>
+                                            setBody(JsonObject(mapBody.mapValues { anyToJsonElement(it.value) }))
+                                        } else if (body is String) {
+                                            setBody(json.parseToJsonElement(body))
+                                        }
+                                    }
+                                    if (reqResponse.status == HttpStatusCode.OK) {
+                                        println("✅ Encrypt-generated request sent successfully")
+                                    } else {
+                                        println("❌ Failed to send encrypt-generated request: ${reqResponse.status}")
+                                    }
+                                }
+                                else -> {
+                                    println("⚠️  Unhandled encrypt request type: ${request::class.simpleName}")
+                                }
+                            }
+                        }
+                    }
+
                     return true
                 } else {
                     println("❌ Failed to send encrypted message: ${response.status}")
@@ -1289,7 +1382,9 @@ fun App() {
             }
         }
     }
-}@Composable
+}
+
+@Composable
 fun LoginScreen(onLogin: (String, String, String) -> Unit, error: String?, isLoading: Boolean) {
     var username by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
@@ -1652,3 +1747,5 @@ fun MessageItem(message: Event) {
         }
     }
 }
+
+
