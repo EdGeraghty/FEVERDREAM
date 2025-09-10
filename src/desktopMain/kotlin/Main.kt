@@ -114,6 +114,7 @@ var currentAccessToken: String? = null
 var currentHomeserver: String = "https://matrix.org"
 var currentDeviceId: String? = null
 var currentUserId: String? = null
+var currentSyncToken: String = ""
 
 // Initialize Olm encryption
 fun initializeEncryption(userId: String, deviceId: String) {
@@ -162,7 +163,8 @@ data class SessionData(
     val userId: String,
     val deviceId: String,
     val accessToken: String,
-    val homeserver: String
+    val homeserver: String,
+    val syncToken: String = ""
 )
 
 val sessionFile = File("session.json")
@@ -264,7 +266,7 @@ data class Timeline(val events: List<Event> = emptyList())
 data class Event(val type: String, val event_id: String, val sender: String, val origin_server_ts: Long, val content: JsonElement)
 
 @Serializable
-data class MessageContent(val msgtype: String = "m.text", val body: String)
+data class MessageContent(val msgtype: String = "m.text", val body: String? = null)
 
 @Serializable
 data class EncryptedMessageContent(
@@ -513,7 +515,8 @@ suspend fun login(username: String, password: String, homeserver: String): Login
                     userId = loginResponse.user_id,
                     deviceId = loginResponse.device_id,
                     accessToken = loginResponse.access_token,
-                    homeserver = finalHomeserver
+                    homeserver = finalHomeserver,
+                    syncToken = currentSyncToken
                 )
                 saveSession(sessionData)
                 return loginResponse
@@ -550,7 +553,8 @@ suspend fun login(username: String, password: String, homeserver: String): Login
                                 userId = loginResponse.user_id,
                                 deviceId = loginResponse.device_id,
                                 accessToken = loginResponse.access_token,
-                                homeserver = finalHomeserver
+                                homeserver = finalHomeserver,
+                                syncToken = currentSyncToken
                             )
                             saveSession(sessionData)
                             return loginResponse
@@ -603,7 +607,8 @@ suspend fun login(username: String, password: String, homeserver: String): Login
                         userId = loginResponse.user_id,
                         deviceId = loginResponse.device_id,
                         accessToken = loginResponse.access_token,
-                        homeserver = cleanHomeserver
+                        homeserver = cleanHomeserver,
+                        syncToken = currentSyncToken
                     )
                     saveSession(sessionData)
                     return loginResponse
@@ -666,14 +671,25 @@ suspend fun syncAndProcessToDevice(): Boolean {
     val machine = olmMachine ?: return false
 
     try {
+        println("🔄 Starting sync to process to-device events...")
         val response = client.get("$currentHomeserver/_matrix/client/v3/sync") {
             bearerAuth(token)
             parameter("timeout", "30000") // 30 second timeout to wait for events
-            parameter("filter", """{"room":{"timeline":{"limit":0},"state":{"limit":0},"ephemeral":{"limit":0}},"presence":{"limit":0}}""")
+            parameter("filter", """{"room":{"timeline":{"limit":0},"state":{"limit":0},"ephemeral":{"limit":0}},"presence":{"limit":0},"account_data":{"limit":0},"receipts":{"limit":0}}""")
+            // Use since token if we have one
+            if (currentSyncToken.isNotBlank()) {
+                parameter("since", currentSyncToken)
+            }
         }
 
         if (response.status == HttpStatusCode.OK) {
             val syncResponse = response.body<SyncResponse>()
+
+            // Update sync token for next sync
+            if (syncResponse.nextBatch != null) {
+                currentSyncToken = syncResponse.nextBatch!!
+                println("🔄 Updated sync token: ${currentSyncToken.take(10)}...")
+            }
 
             // Extract to-device events
             val toDeviceEvents = syncResponse.toDevice?.events ?: emptyList()
@@ -695,6 +711,9 @@ suspend fun syncAndProcessToDevice(): Boolean {
                 )
 
                 println("🔄 Processed sync changes: ${syncChanges.roomKeyInfos.size} room keys received")
+                if (syncChanges.roomKeyInfos.isNotEmpty()) {
+                    println("🔑 Room keys received: ${syncChanges.roomKeyInfos.joinToString(", ") { it.roomId }}")
+                }
                 return true
             } else {
                 println("📭 No to-device events received")
@@ -749,9 +768,34 @@ suspend fun getRoomMessages(roomId: String): List<Event> {
                                 handleVerificationEvents = false,
                                 strictShields = false
                             )
-                            json.decodeFromString<Event>(decrypted.clearEvent)
+
+                            // Parse the decrypted content and merge with original event metadata
+                            val decryptedContent = json.parseToJsonElement(decrypted.clearEvent)
+
+                            // Try to decode as MessageContent, but handle cases where it might not match
+                            val messageContent = try {
+                                json.decodeFromJsonElement<MessageContent>(decryptedContent)
+                            } catch (e: Exception) {
+                                // If it doesn't match MessageContent structure, create a fallback
+                                println("⚠️  Decrypted content doesn't match expected format: ${decrypted.clearEvent}")
+                                MessageContent("m.text", decrypted.clearEvent.trim('"'))
+                            }
+
+                            // Ensure we have a body field
+                            val finalContent = if (messageContent.body.isNullOrBlank()) {
+                                messageContent.copy(body = decrypted.clearEvent.trim('"'))
+                            } else {
+                                messageContent
+                            }
+
+                            // Create a new event with the decrypted content but preserve original metadata
+                            event.copy(
+                                type = "m.room.message",
+                                content = json.parseToJsonElement(json.encodeToString(finalContent))
+                            )
                         } catch (e: Exception) {
                             // If decryption fails, create a message with error
+                            println("❌ Decryption failed: ${e.message}")
                             event.copy(
                                 type = "m.room.message",
                                 content = json.parseToJsonElement("""{"msgtype": "m.bad.encrypted", "body": "** Unable to decrypt: ${e.message} **"}""")
@@ -995,6 +1039,7 @@ fun App() {
                     currentDeviceId = sessionData.deviceId
                     currentUserId = sessionData.userId
                     currentHomeserver = sessionData.homeserver
+                    currentSyncToken = sessionData.syncToken
 
                     // Initialize encryption with restored session
                     initializeEncryption(sessionData.userId, sessionData.deviceId)
@@ -1077,6 +1122,7 @@ fun App() {
                             currentDeviceId = null
                             currentUserId = null
                             currentHomeserver = "https://matrix.org"
+                            currentSyncToken = ""
                             olmMachine = null
                             // Reset UI state
                             loginResponse = null
@@ -1307,6 +1353,8 @@ fun ChatWindow(roomId: String, onClose: () -> Unit) {
     LaunchedEffect(roomId) {
         isLoading = true
         scope.launch {
+            // Sync to get latest keys before loading messages
+            syncAndProcessToDevice()
             messages = getRoomMessages(roomId)
             isEncrypted = isRoomEncrypted(roomId)
             isLoading = false
@@ -1378,7 +1426,8 @@ fun ChatWindow(roomId: String, onClose: () -> Unit) {
                             scope.launch {
                                 if (sendMessage(roomId, newMessage)) {
                                     newMessage = ""
-                                    // Refresh messages
+                                    // Sync and refresh messages after sending
+                                    syncAndProcessToDevice()
                                     messages = getRoomMessages(roomId)
                                 }
                             }
@@ -1400,9 +1449,9 @@ fun MessageItem(message: Event) {
             try {
                 val content = json.decodeFromJsonElement<MessageContent>(message.content)
                 when (content.msgtype) {
-                    "m.text" -> content.body
-                    "m.bad.encrypted" -> content.body
-                    else -> "[${content.msgtype}] ${content.body}"
+                    "m.text" -> content.body ?: "[No message content]"
+                    "m.bad.encrypted" -> content.body ?: "[Unable to decrypt]"
+                    else -> "[${content.msgtype}] ${content.body ?: "[No content]"}"
                 }
             } catch (e: Exception) {
                 "[Unable to parse message]"
