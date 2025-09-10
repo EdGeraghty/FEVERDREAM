@@ -9,6 +9,7 @@ repositories {
     maven { url = uri("https://oss.sonatype.org/content/repositories/snapshots") }
     maven { url = uri("https://jitpack.io") }
     maven { url = uri("https://s01.oss.sonatype.org/content/repositories/snapshots/") }
+    maven { url = uri("https://maven.matrix.org/") } // Matrix repository
 }
 
 kotlin {
@@ -28,7 +29,7 @@ kotlin {
                 implementation("io.ktor:ktor-client-content-negotiation:2.3.0")
                 implementation("io.ktor:ktor-serialization-kotlinx-json:2.3.0")
 
-                // Encryption support - using a simpler approach
+                // Encryption support - Custom Olm-like implementation
                 implementation("com.google.crypto.tink:tink:1.7.0")
             }
         }
