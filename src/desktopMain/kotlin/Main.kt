@@ -17,10 +17,21 @@ import io.ktor.serialization.kotlinx.json.*
 import kotlinx.coroutines.*
 import kotlinx.serialization.*
 import kotlinx.serialization.json.*
+import javax.net.ssl.X509TrustManager
 
 val client = HttpClient(CIO) {
     install(ContentNegotiation) {
         json(Json { ignoreUnknownKeys = true })
+    }
+    engine {
+        https {
+            // Allow older TLS versions for compatibility
+            trustManager = object : X509TrustManager {
+                override fun checkClientTrusted(chain: Array<out java.security.cert.X509Certificate>?, authType: String?) {}
+                override fun checkServerTrusted(chain: Array<out java.security.cert.X509Certificate>?, authType: String?) {}
+                override fun getAcceptedIssuers(): Array<java.security.cert.X509Certificate> = arrayOf()
+            }
+        }
     }
 }
 
@@ -44,17 +55,25 @@ suspend fun login(username: String, password: String, homeserver: String): Strin
             homeserver
         }
 
-        // Format username - if it doesn't contain :, assume it's just the localpart
-        val userId = if (username.contains(":")) {
-            username
+        // Clean username - remove @ if present
+        val cleanUsername = username.removePrefix("@")
+
+        // Try different user ID formats
+        val userId = if (cleanUsername.contains(":")) {
+            cleanUsername
         } else {
-            "$username:${cleanHomeserver.removePrefix("https://")}"
+            // For matrix.org and similar, try both formats
+            cleanUsername // Let the server handle the homeserver part
         }
+
+        println("Attempting login with user: $userId, homeserver: $cleanHomeserver")
 
         val response = client.post("$cleanHomeserver/_matrix/client/v3/login") {
             contentType(ContentType.Application.Json)
             setBody(LoginRequest(user = userId, password = password))
         }
+
+        println("Login response status: ${response.status}")
 
         return when (response.status) {
             HttpStatusCode.OK -> {
@@ -66,6 +85,9 @@ suspend fun login(username: String, password: String, homeserver: String): Strin
             }
             HttpStatusCode.Forbidden -> {
                 throw Exception("Login forbidden - check your account status")
+            }
+            HttpStatusCode.BadRequest -> {
+                throw Exception("Bad request - check username format (try without @ or :server)")
             }
             else -> {
                 throw Exception("Server error: ${response.status}")
