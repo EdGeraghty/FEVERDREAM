@@ -2,6 +2,7 @@ import androidx.compose.desktop.ui.tooling.preview.Preview
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
@@ -75,15 +76,33 @@ fun App() {
     val scope = rememberCoroutineScope()
     var accessToken by remember { mutableStateOf<String?>(null) }
     var homeserver by remember { mutableStateOf("https://matrix.org") }
+    var error by remember { mutableStateOf<String?>(null) }
+    var isLoading by remember { mutableStateOf(false) }
 
     MaterialTheme {
         if (accessToken == null) {
-            LoginScreen { username, password, hs ->
-                homeserver = hs
-                scope.launch {
-                    accessToken = login(username, password, homeserver)
-                }
-            }
+            LoginScreen(
+                onLogin = { username, password, hs ->
+                    if (username.isBlank() || password.isBlank() || hs.isBlank()) {
+                        error = "Please fill in all fields"
+                        return@LoginScreen
+                    }
+                    isLoading = true
+                    error = null
+                    homeserver = hs
+                    scope.launch {
+                        val token = login(username, password, homeserver)
+                        if (token != null) {
+                            accessToken = token
+                        } else {
+                            error = "Login failed. Please check your credentials."
+                        }
+                        isLoading = false
+                    }
+                },
+                error = error,
+                isLoading = isLoading
+            )
         } else {
             ChatScreen(accessToken!!, homeserver)
         }
@@ -91,17 +110,59 @@ fun App() {
 }
 
 @Composable
-fun LoginScreen(onLogin: (String, String, String) -> Unit) {
+fun LoginScreen(onLogin: (String, String, String) -> Unit, error: String?, isLoading: Boolean) {
     var username by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var homeserver by remember { mutableStateOf("https://matrix.org") }
 
-    Column(modifier = Modifier.padding(16.dp)) {
-        TextField(value = username, onValueChange = { username = it }, label = { Text("Username") })
-        TextField(value = password, onValueChange = { password = it }, label = { Text("Password") }, visualTransformation = PasswordVisualTransformation())
-        TextField(value = homeserver, onValueChange = { homeserver = it }, label = { Text("Homeserver") })
-        Button(onClick = { onLogin(username, password, homeserver) }) {
-            Text("Login")
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Text("FEVERDREAM", style = MaterialTheme.typography.h4)
+        Spacer(modifier = Modifier.height(32.dp))
+        TextField(
+            value = username,
+            onValueChange = { username = it },
+            label = { Text("Username") },
+            modifier = Modifier.fillMaxWidth(0.5f),
+            enabled = !isLoading
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        TextField(
+            value = password,
+            onValueChange = { password = it },
+            label = { Text("Password") },
+            visualTransformation = PasswordVisualTransformation(),
+            modifier = Modifier.fillMaxWidth(0.5f),
+            enabled = !isLoading
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        TextField(
+            value = homeserver,
+            onValueChange = { homeserver = it },
+            label = { Text("Homeserver") },
+            modifier = Modifier.fillMaxWidth(0.5f),
+            enabled = !isLoading
+        )
+        Spacer(modifier = Modifier.height(16.dp))
+        if (error != null) {
+            Text(error, color = MaterialTheme.colors.error)
+            Spacer(modifier = Modifier.height(8.dp))
+        }
+        Button(
+            onClick = { onLogin(username, password, homeserver) },
+            enabled = !isLoading,
+            modifier = Modifier.fillMaxWidth(0.5f)
+        ) {
+            if (isLoading) {
+                CircularProgressIndicator(modifier = Modifier.size(20.dp))
+            } else {
+                Text("Login")
+            }
         }
     }
 }
