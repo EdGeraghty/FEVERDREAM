@@ -127,27 +127,72 @@ suspend fun login(username: String, password: String, homeserver: String): Login
         }
 
         val cleanUsername = username.removePrefix("@")
-        val userId = if (cleanUsername.contains(":")) cleanUsername else "$cleanUsername:${cleanHomeserver.removePrefix("https://").removePrefix("http://")}"
 
-        println("Attempting login with user: $userId")
-
-        val loginRequest = LoginRequestV2(
-            identifier = Identifier(user = userId),
-            password = password
-        )
-
-        val response = client.post("$cleanHomeserver/_matrix/client/v3/login") {
-            contentType(ContentType.Application.Json)
-            setBody(loginRequest)
+        // Extract homeserver from user ID if it contains a domain
+        val (userId, actualHomeserver) = if (cleanUsername.contains(":")) {
+            val parts = cleanUsername.split(":", limit = 2)
+            val userPart = parts[0]
+            val domainPart = parts[1]
+            // Handle cases where domain might already include protocol
+            val extractedHomeserver = when {
+                domainPart.startsWith("https://") -> domainPart
+                domainPart.startsWith("http://") -> domainPart.replace("http://", "https://")
+                else -> "https://$domainPart"
+            }
+            Pair(userPart, extractedHomeserver)
+        } else {
+            val userId = cleanUsername
+            Pair(userId, cleanHomeserver)
         }
 
-        if (response.status == HttpStatusCode.OK) {
-            val loginResponse = response.body<LoginResponse>()
-            currentAccessToken = loginResponse.access_token
-            currentHomeserver = cleanHomeserver
-            return loginResponse
-        } else {
-            throw Exception("Login failed: ${response.status}")
+        // Use the extracted homeserver if available, otherwise use the provided one
+        val finalHomeserver = actualHomeserver
+        currentHomeserver = finalHomeserver
+
+        println("Attempting login with user: $userId on homeserver: $finalHomeserver")
+
+        // Try login with the determined homeserver
+        try {
+            val loginRequest = LoginRequestV2(
+                identifier = Identifier(user = userId),
+                password = password
+            )
+
+            val response = client.post("$finalHomeserver/_matrix/client/v3/login") {
+                contentType(ContentType.Application.Json)
+                setBody(loginRequest)
+            }
+
+            if (response.status == HttpStatusCode.OK) {
+                val loginResponse = response.body<LoginResponse>()
+                currentAccessToken = loginResponse.access_token
+                return loginResponse
+            } else {
+                throw Exception("Login failed: ${response.status} - ${response.status.description}")
+            }
+        } catch (e: Exception) {
+            // If the extracted homeserver fails and it's different from the provided one, try the provided homeserver
+            if (actualHomeserver != cleanHomeserver && e.message?.contains("400") == true) {
+                println("Login failed on extracted homeserver, trying provided homeserver: $cleanHomeserver")
+                currentHomeserver = cleanHomeserver
+
+                val fallbackRequest = LoginRequestV2(
+                    identifier = Identifier(user = userId),
+                    password = password
+                )
+
+                val fallbackResponse = client.post("$cleanHomeserver/_matrix/client/v3/login") {
+                    contentType(ContentType.Application.Json)
+                    setBody(fallbackRequest)
+                }
+
+                if (fallbackResponse.status == HttpStatusCode.OK) {
+                    val loginResponse = fallbackResponse.body<LoginResponse>()
+                    currentAccessToken = loginResponse.access_token
+                    return loginResponse
+                }
+            }
+            throw e
         }
 
     } catch (e: Exception) {
@@ -330,7 +375,7 @@ fun App() {
 fun LoginScreen(onLogin: (String, String, String) -> Unit, error: String?, isLoading: Boolean) {
     var username by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
-    var homeserver by remember { mutableStateOf("https://matrix.org") }
+    var homeserver by remember { mutableStateOf("") }
 
     Column(
         modifier = Modifier
@@ -362,7 +407,7 @@ fun LoginScreen(onLogin: (String, String, String) -> Unit, error: String?, isLoa
         TextField(
             value = homeserver,
             onValueChange = { homeserver = it },
-            label = { Text("Homeserver") },
+            label = { Text("Homeserver (leave empty if using user@domain format)") },
             modifier = Modifier.fillMaxWidth(0.5f),
             enabled = !isLoading
         )
