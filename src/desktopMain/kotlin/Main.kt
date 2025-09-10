@@ -21,6 +21,7 @@ import io.ktor.serialization.kotlinx.json.*
 import kotlinx.coroutines.*
 import kotlinx.serialization.*
 import kotlinx.serialization.json.*
+import kotlinx.serialization.builtins.*
 import java.security.SecureRandom
 import javax.net.ssl.SSLContext
 import javax.net.ssl.X509TrustManager
@@ -29,9 +30,17 @@ import org.matrix.rustcomponents.sdk.crypto.*
 import uniffi.matrix_sdk_crypto.CollectStrategy
 import uniffi.matrix_sdk_crypto.DecryptionSettings
 
+import kotlinx.serialization.modules.*
+
 val json = Json { 
     ignoreUnknownKeys = true
     encodeDefaults = true
+    isLenient = true
+    serializersModule = SerializersModule {
+        polymorphic(Map::class) {
+            default { MapSerializer(String.serializer(), JsonElement.serializer()) }
+        }
+    }
 }
 
 val client = HttpClient(Apache) {
