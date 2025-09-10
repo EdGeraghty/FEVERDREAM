@@ -35,18 +35,46 @@ data class JoinedRoomsResponse(val joined_rooms: List<String>)
 
 suspend fun login(username: String, password: String, homeserver: String): String? {
     try {
-        val response = client.post("$homeserver/_matrix/client/v3/login") {
-            contentType(ContentType.Application.Json)
-            setBody(LoginRequest(user = username, password = password))
+        // Ensure homeserver has https
+        val cleanHomeserver = if (homeserver.startsWith("http://")) {
+            homeserver.replace("http://", "https://")
+        } else if (!homeserver.startsWith("https://")) {
+            "https://$homeserver"
+        } else {
+            homeserver
         }
-        if (response.status == HttpStatusCode.OK) {
-            val loginResponse = response.body<LoginResponse>()
-            return loginResponse.access_token
+
+        // Format username - if it doesn't contain :, assume it's just the localpart
+        val userId = if (username.contains(":")) {
+            username
+        } else {
+            "$username:${cleanHomeserver.removePrefix("https://")}"
+        }
+
+        val response = client.post("$cleanHomeserver/_matrix/client/v3/login") {
+            contentType(ContentType.Application.Json)
+            setBody(LoginRequest(user = userId, password = password))
+        }
+
+        return when (response.status) {
+            HttpStatusCode.OK -> {
+                val loginResponse = response.body<LoginResponse>()
+                loginResponse.access_token
+            }
+            HttpStatusCode.Unauthorized -> {
+                throw Exception("Invalid username or password")
+            }
+            HttpStatusCode.Forbidden -> {
+                throw Exception("Login forbidden - check your account status")
+            }
+            else -> {
+                throw Exception("Server error: ${response.status}")
+            }
         }
     } catch (e: Exception) {
         println("Login failed: ${e.message}")
+        throw e // Re-throw to preserve the error message
     }
-    return null
 }
 
 suspend fun getJoinedRooms(homeserver: String, accessToken: String): List<String> {
@@ -91,13 +119,14 @@ fun App() {
                     error = null
                     homeserver = hs
                     scope.launch {
-                        val token = login(username, password, homeserver)
-                        if (token != null) {
+                        try {
+                            val token = login(username, password, homeserver)
                             accessToken = token
-                        } else {
-                            error = "Login failed. Please check your credentials."
+                        } catch (e: Exception) {
+                            error = e.message ?: "Login failed. Please try again."
+                        } finally {
+                            isLoading = false
                         }
-                        isLoading = false
                     }
                 },
                 error = error,
