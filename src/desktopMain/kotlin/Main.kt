@@ -688,6 +688,7 @@ suspend fun sendMessage(roomId: String, message: String): Boolean {
                                 contentType(ContentType.Application.Json)
                                 val body = convertMapToHashMap(request.body)
                                 if (body is Map<*, *>) {
+                                    @Suppress("UNCHECKED_CAST")
                                     setBody(body as Map<String, Any>)
                                 } else if (body is String) {
                                     setBody(json.parseToJsonElement(body))
@@ -704,6 +705,7 @@ suspend fun sendMessage(roomId: String, message: String): Boolean {
                                 contentType(ContentType.Application.Json)
                                 val body = convertMapToHashMap(request.body)
                                 if (body is Map<*, *>) {
+                                    @Suppress("UNCHECKED_CAST")
                                     setBody(body as Map<String, Any>)
                                 } else if (body is String) {
                                     setBody(json.parseToJsonElement(body))
@@ -714,14 +716,15 @@ suspend fun sendMessage(roomId: String, message: String): Boolean {
                             }
                         }
                         is Request.KeysQuery -> {
-                            val usersMap = request.users as? Map<*, *>
-                            val userCount = usersMap?.size ?: 0
+                            val requestUsersMap = request.users as? Map<*, *>
+                            val userCount = requestUsersMap?.size ?: 0
                             println("📤 Sending keys query request for $userCount users")
                             val response = client.post("$currentHomeserver/_matrix/client/v3/keys/query") {
                                 bearerAuth(token)
                                 contentType(ContentType.Application.Json)
                                 val convertedUsers = convertMapToHashMap(request.users)
                                 if (convertedUsers is Map<*, *>) {
+                                    @Suppress("UNCHECKED_CAST")
                                     val usersMap = convertedUsers as Map<String, Any>
                                     setBody(mapOf("device_keys" to usersMap.mapValues { emptyMap<String, Any>() }))
                                 } else {
@@ -762,6 +765,7 @@ suspend fun sendMessage(roomId: String, message: String): Boolean {
                                 contentType(ContentType.Application.Json)
                                 val body = convertMapToHashMap(request.body)
                                 if (body is Map<*, *>) {
+                                    @Suppress("UNCHECKED_CAST")
                                     setBody(body as Map<String, Any>)
                                 } else if (body is String) {
                                     setBody(json.parseToJsonElement(body))
