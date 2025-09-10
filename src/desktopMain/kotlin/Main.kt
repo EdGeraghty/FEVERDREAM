@@ -23,6 +23,12 @@ import kotlinx.serialization.*
 import kotlinx.serialization.json.*
 import javax.net.ssl.X509TrustManager
 
+// Configure TLS to support older versions globally
+fun configureTLS() {
+    System.setProperty("https.protocols", "TLSv1,TLSv1.1,TLSv1.2,TLSv1.3")
+    System.setProperty("jdk.tls.client.protocols", "TLSv1,TLSv1.1,TLSv1.2,TLSv1.3")
+}
+
 val client = HttpClient(CIO) {
     install(ContentNegotiation) {
         json(Json { ignoreUnknownKeys = true })
@@ -342,6 +348,9 @@ suspend fun rejectRoomInvite(roomId: String): Boolean {
 }
 
 fun main() = application {
+    // Configure TLS for older server compatibility
+    configureTLS()
+
     Window(onCloseRequest = { exitProcess(0) }, title = "FEVERDREAM") {
         App()
     }
