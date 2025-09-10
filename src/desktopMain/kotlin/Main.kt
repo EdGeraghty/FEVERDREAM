@@ -82,13 +82,34 @@ data class Rooms(val invite: Map<String, InvitedRoom>? = null)
 data class InvitedRoom(val invite_state: RoomState? = null)
 
 @Serializable
-data class MessageEvent(val type: String, val event_id: String, val sender: String, val origin_server_ts: Long, val content: MessageContent)
+data class MessageEvent(val type: String, val event_id: String, val sender: String, val origin_server_ts: Long, val content: JsonElement)
 
 @Serializable
 data class MessageContent(val msgtype: String, val body: String)
 
 @Serializable
+data class EncryptedMessageContent(
+    val algorithm: String,
+    val ciphertext: String,
+    val device_id: String? = null,
+    val sender_key: String? = null,
+    val session_id: String? = null
+)
+
+@Serializable
+data class RoomEncryptionState(val algorithm: String = "m.megolm.v1.aes-sha2")
+
+@Serializable
 data class SendMessageRequest(val msgtype: String = "m.text", val body: String)
+
+@Serializable
+data class EncryptedSendMessageRequest(
+    val algorithm: String = "m.megolm.v1.aes-sha2",
+    val ciphertext: String,
+    val device_id: String,
+    val sender_key: String,
+    val session_id: String
+)
 
 @Serializable
 data class RoomMessagesResponse(val chunk: List<MessageEvent>)
@@ -110,14 +131,90 @@ suspend fun getRoomMessages(homeserver: String, accessToken: String, roomId: Str
     return emptyList()
 }
 
-suspend fun sendMessage(homeserver: String, accessToken: String, roomId: String, message: String): Boolean {
+suspend fun isRoomEncrypted(homeserver: String, accessToken: String, roomId: String): Boolean {
     try {
-        val response = client.put("$homeserver/_matrix/client/v3/rooms/$roomId/send/m.room.message/${System.currentTimeMillis()}") {
+        val response = client.get("$homeserver/_matrix/client/v3/rooms/$roomId/state/m.room.encryption") {
             bearerAuth(accessToken)
-            contentType(ContentType.Application.Json)
-            setBody(SendMessageRequest(body = message))
         }
         return response.status == HttpStatusCode.OK
+    } catch (e: Exception) {
+        // Room is not encrypted if we can't get encryption state
+        return false
+    }
+}
+
+suspend fun decryptMessage(encryptedContent: EncryptedMessageContent, roomId: String): String {
+    try {
+        // This is a placeholder for actual decryption logic
+        // In a real implementation, you would:
+        // 1. Get the Olm/Megolm session for this room
+        // 2. Decrypt the ciphertext using the session
+        // 3. Return the decrypted plaintext
+
+        println("Attempting to decrypt message with algorithm: ${encryptedContent.algorithm}")
+
+        // Placeholder: return a decrypted message indicator
+        return "[Encrypted message - decryption not yet implemented]"
+
+    } catch (e: Exception) {
+        println("Decryption failed: ${e.message}")
+        return "[Failed to decrypt message]"
+    }
+}
+
+suspend fun encryptMessage(message: String, roomId: String): EncryptedMessageContent? {
+    try {
+        // This is a placeholder for actual encryption logic
+        // In a real implementation, you would:
+        // 1. Get or create a Megolm session for this room
+        // 2. Encrypt the message using the session
+        // 3. Return the encrypted content
+
+        println("Attempting to encrypt message for room: $roomId")
+
+        // Placeholder: return mock encrypted content
+        return EncryptedMessageContent(
+            algorithm = "m.megolm.v1.aes-sha2",
+            ciphertext = "encrypted_placeholder_${System.currentTimeMillis()}",
+            device_id = "placeholder_device",
+            sender_key = "placeholder_sender_key",
+            session_id = "placeholder_session"
+        )
+
+    } catch (e: Exception) {
+        println("Encryption failed: ${e.message}")
+        return null
+    }
+}
+
+suspend fun sendMessage(homeserver: String, accessToken: String, roomId: String, message: String): Boolean {
+    try {
+        // Check if room is encrypted
+        val isEncrypted = isRoomEncrypted(homeserver, accessToken, roomId)
+
+        if (isEncrypted) {
+            // Encrypt the message
+            val encryptedContent = encryptMessage(message, roomId)
+            if (encryptedContent != null) {
+                val response = client.put("$homeserver/_matrix/client/v3/rooms/$roomId/send/m.room.encrypted/${System.currentTimeMillis()}") {
+                    bearerAuth(accessToken)
+                    contentType(ContentType.Application.Json)
+                    setBody(encryptedContent)
+                }
+                return response.status == HttpStatusCode.OK
+            } else {
+                println("Failed to encrypt message")
+                return false
+            }
+        } else {
+            // Send unencrypted message
+            val response = client.put("$homeserver/_matrix/client/v3/rooms/$roomId/send/m.room.message/${System.currentTimeMillis()}") {
+                bearerAuth(accessToken)
+                contentType(ContentType.Application.Json)
+                setBody(SendMessageRequest(body = message))
+            }
+            return response.status == HttpStatusCode.OK
+        }
     } catch (e: Exception) {
         println("Send message failed: ${e.message}")
     }
@@ -543,6 +640,7 @@ fun ChatWindow(roomId: String, homeserver: String, accessToken: String, onClose:
     var messages by remember { mutableStateOf(listOf<MessageEvent>()) }
     var newMessage by remember { mutableStateOf("") }
     var isLoading by remember { mutableStateOf(true) }
+    var isEncrypted by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
 
@@ -550,6 +648,7 @@ fun ChatWindow(roomId: String, homeserver: String, accessToken: String, onClose:
         isLoading = true
         scope.launch {
             messages = getRoomMessages(homeserver, accessToken, roomId)
+            isEncrypted = isRoomEncrypted(homeserver, accessToken, roomId)
             isLoading = false
         }
     }
@@ -563,7 +662,12 @@ fun ChatWindow(roomId: String, homeserver: String, accessToken: String, onClose:
                     .padding(16.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("Chat: $roomId", style = MaterialTheme.typography.h6, modifier = Modifier.weight(1f))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Chat: $roomId", style = MaterialTheme.typography.h6)
+                    if (isEncrypted) {
+                        Text("🔒 Encrypted Room", style = MaterialTheme.typography.caption, color = MaterialTheme.colors.primary)
+                    }
+                }
                 Button(onClick = onClose) {
                     Text("Close")
                 }
@@ -582,7 +686,7 @@ fun ChatWindow(roomId: String, homeserver: String, accessToken: String, onClose:
                         reverseLayout = false
                     ) {
                         items(messages) { message ->
-                            MessageItem(message)
+                            MessageItem(message, roomId, scope)
                         }
                     }
 
@@ -630,7 +734,41 @@ fun ChatWindow(roomId: String, homeserver: String, accessToken: String, onClose:
 }
 
 @Composable
-fun MessageItem(message: MessageEvent) {
+fun MessageItem(message: MessageEvent, roomId: String, scope: CoroutineScope) {
+    var decryptedBody by remember { mutableStateOf<String?>(null) }
+    var isDecrypting by remember { mutableStateOf(false) }
+
+    // Handle message content based on type
+    val displayBody = when (message.type) {
+        "m.room.message" -> {
+            try {
+                val content = Json.decodeFromJsonElement<MessageContent>(message.content)
+                content.body
+            } catch (e: Exception) {
+                "[Unable to parse message]"
+            }
+        }
+        "m.room.encrypted" -> {
+            if (decryptedBody == null && !isDecrypting) {
+                isDecrypting = true
+                scope.launch {
+                    try {
+                        val encryptedContent = Json.decodeFromJsonElement<EncryptedMessageContent>(message.content)
+                        decryptedBody = decryptMessage(encryptedContent, roomId)
+                    } catch (e: Exception) {
+                        decryptedBody = "[Failed to decrypt]"
+                    } finally {
+                        isDecrypting = false
+                    }
+                }
+                "🔒 Decrypting..."
+            } else {
+                decryptedBody ?: "🔒 Encrypted message"
+            }
+        }
+        else -> "[Unsupported message type: ${message.type}]"
+    }
+
     val isOwnMessage = message.sender == "You" // This would need to be updated with actual user ID
     val backgroundColor = if (isOwnMessage) MaterialTheme.colors.primary else MaterialTheme.colors.surface
     val textColor = if (isOwnMessage) MaterialTheme.colors.onPrimary else MaterialTheme.colors.onSurface
@@ -653,7 +791,7 @@ fun MessageItem(message: MessageEvent) {
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = message.content.body,
+                    text = displayBody,
                     style = MaterialTheme.typography.body1,
                     color = textColor
                 )
