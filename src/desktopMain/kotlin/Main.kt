@@ -122,6 +122,63 @@ fun initializeEncryption(userId: String, deviceId: String) {
 
 
 @Serializable
+data class SessionData(
+    val userId: String,
+    val deviceId: String,
+    val accessToken: String,
+    val homeserver: String
+)
+
+val sessionFile = File("session.json")
+
+suspend fun saveSession(sessionData: SessionData) {
+    try {
+        sessionFile.writeText(json.encodeToString(sessionData))
+        println("💾 Session saved")
+    } catch (e: Exception) {
+        println("❌ Failed to save session: ${e.message}")
+    }
+}
+
+suspend fun loadSession(): SessionData? {
+    return try {
+        if (sessionFile.exists()) {
+            val sessionData = json.decodeFromString<SessionData>(sessionFile.readText())
+            println("📂 Session loaded for user: ${sessionData.userId}")
+            sessionData
+        } else {
+            null
+        }
+    } catch (e: Exception) {
+        println("❌ Failed to load session: ${e.message}")
+        null
+    }
+}
+
+suspend fun validateSession(sessionData: SessionData): Boolean {
+    return try {
+        val response = client.get("${sessionData.homeserver}/_matrix/client/v3/account/whoami") {
+            bearerAuth(sessionData.accessToken)
+        }
+        response.status == HttpStatusCode.OK
+    } catch (e: Exception) {
+        println("❌ Session validation failed: ${e.message}")
+        false
+    }
+}
+
+suspend fun clearSession() {
+    try {
+        if (sessionFile.exists()) {
+            sessionFile.delete()
+            println("🗑️ Session cleared")
+        }
+    } catch (e: Exception) {
+        println("❌ Failed to clear session: ${e.message}")
+    }
+}
+
+@Serializable
 data class LoginRequest(val type: String = "m.login.password", val user: String, val password: String)
 
 @Serializable
@@ -408,6 +465,14 @@ suspend fun login(username: String, password: String, homeserver: String): Login
                 println("🔑 Logged in with device ID: ${currentDeviceId}")
                 // Initialize encryption system after successful login
                 initializeEncryption(loginResponse.user_id, loginResponse.device_id)
+                // Save session data
+                val sessionData = SessionData(
+                    userId = loginResponse.user_id,
+                    deviceId = loginResponse.device_id,
+                    accessToken = loginResponse.access_token,
+                    homeserver = finalHomeserver
+                )
+                saveSession(sessionData)
                 return loginResponse
             } else {
                 // Try to get error details from response
@@ -437,6 +502,14 @@ suspend fun login(username: String, password: String, homeserver: String): Login
                             println("Login successful with older format")
                             // Initialize encryption system after successful login
                             initializeEncryption(loginResponse.user_id, loginResponse.device_id)
+                            // Save session data
+                            val sessionData = SessionData(
+                                userId = loginResponse.user_id,
+                                deviceId = loginResponse.device_id,
+                                accessToken = loginResponse.access_token,
+                                homeserver = finalHomeserver
+                            )
+                            saveSession(sessionData)
                             return loginResponse
                         } else {
                             println("Older login format also failed: ${oldResponse.status}")
@@ -482,6 +555,14 @@ suspend fun login(username: String, password: String, homeserver: String): Login
                     println("🔑 Logged in with device ID: ${currentDeviceId}")
                     // Initialize encryption system after successful login
                     initializeEncryption(loginResponse.user_id, loginResponse.device_id)
+                    // Save session data
+                    val sessionData = SessionData(
+                        userId = loginResponse.user_id,
+                        deviceId = loginResponse.device_id,
+                        accessToken = loginResponse.access_token,
+                        homeserver = cleanHomeserver
+                    )
+                    saveSession(sessionData)
                     return loginResponse
                 }
             }
@@ -738,44 +819,114 @@ fun App() {
     var loginResponse by remember { mutableStateOf<LoginResponse?>(null) }
     var homeserver by remember { mutableStateOf("https://matrix.org") }
     var error by remember { mutableStateOf<String?>(null) }
-    var isLoading by remember { mutableStateOf(false) }
+    var isLoading by remember { mutableStateOf(true) }
+    var isRestoringSession by remember { mutableStateOf(true) }
+
+    // Check for existing session on app launch
+    LaunchedEffect(Unit) {
+        scope.launch {
+            try {
+                val sessionData = loadSession()
+                if (sessionData != null && validateSession(sessionData)) {
+                    // Restore session data
+                    currentAccessToken = sessionData.accessToken
+                    currentDeviceId = sessionData.deviceId
+                    currentUserId = sessionData.userId
+                    currentHomeserver = sessionData.homeserver
+
+                    // Initialize encryption with restored session
+                    initializeEncryption(sessionData.userId, sessionData.deviceId)
+
+                    // Create login response for UI
+                    loginResponse = LoginResponse(
+                        user_id = sessionData.userId,
+                        access_token = sessionData.accessToken,
+                        device_id = sessionData.deviceId
+                    )
+
+                    println("✅ Session restored successfully")
+                } else {
+                    if (sessionData != null) {
+                        println("❌ Stored session is invalid, clearing...")
+                        clearSession()
+                    }
+                }
+            } catch (e: Exception) {
+                println("❌ Failed to restore session: ${e.message}")
+                clearSession()
+            } finally {
+                isRestoringSession = false
+                isLoading = false
+            }
+        }
+    }
 
     MaterialTheme {
-        if (loginResponse == null) {
-            LoginScreen(
-                onLogin = { username, password, hs ->
-                    // Allow empty homeserver if username contains domain
-                    val homeserverRequired = !username.contains(":")
-                    if (username.isBlank() || password.isBlank() || (homeserverRequired && hs.isBlank())) {
-                        error = if (username.isBlank()) "Please enter a username"
-                               else if (password.isBlank()) "Please enter a password"
-                               else "Please enter a homeserver or use username@domain format"
-                        return@LoginScreen
-                    }
-                    isLoading = true
-                    error = null
-                    homeserver = hs
-                    scope.launch {
-                        try {
-                            val response = login(username, password, homeserver)
-                            loginResponse = response
-                        } catch (e: Exception) {
-                            error = e.message ?: "Login failed. Please try again."
-                        } finally {
+        when {
+            isRestoringSession -> {
+                // Show loading screen while checking for existing session
+                Column(
+                    modifier = Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.Center,
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    CircularProgressIndicator()
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text("Restoring session...")
+                }
+            }
+            loginResponse == null -> {
+                LoginScreen(
+                    onLogin = { username, password, hs ->
+                        // Allow empty homeserver if username contains domain
+                        val homeserverRequired = !username.contains(":")
+                        if (username.isBlank() || password.isBlank() || (homeserverRequired && hs.isBlank())) {
+                            error = if (username.isBlank()) "Please enter a username"
+                                   else if (password.isBlank()) "Please enter a password"
+                                   else "Please enter a homeserver or use username@domain format"
+                            return@LoginScreen
+                        }
+                        isLoading = true
+                        error = null
+                        homeserver = hs
+                        scope.launch {
+                            try {
+                                val response = login(username, password, homeserver)
+                                loginResponse = response
+                            } catch (e: Exception) {
+                                error = e.message ?: "Login failed. Please try again."
+                            } finally {
+                                isLoading = false
+                            }
+                        }
+                    },
+                    error = error,
+                    isLoading = isLoading
+                )
+            }
+            else -> {
+                ChatScreen(
+                    loginResponse = loginResponse!!,
+                    onLogout = {
+                        scope.launch {
+                            clearSession()
+                            // Reset global state
+                            currentAccessToken = null
+                            currentDeviceId = null
+                            currentUserId = null
+                            currentHomeserver = "https://matrix.org"
+                            olmMachine = null
+                            // Reset UI state
+                            loginResponse = null
+                            error = null
                             isLoading = false
                         }
                     }
-                },
-                error = error,
-                isLoading = isLoading
-            )
-        } else {
-            ChatScreen(loginResponse!!)
+                )
+            }
         }
     }
-}
-
-@Composable
+}@Composable
 fun LoginScreen(onLogin: (String, String, String) -> Unit, error: String?, isLoading: Boolean) {
     var username by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
@@ -835,7 +986,7 @@ fun LoginScreen(onLogin: (String, String, String) -> Unit, error: String?, isLoa
 }
 
 @Composable
-fun ChatScreen(loginResponse: LoginResponse) {
+fun ChatScreen(loginResponse: LoginResponse, onLogout: () -> Unit) {
     var rooms by remember { mutableStateOf(listOf<String>()) }
     var invites by remember { mutableStateOf(listOf<RoomInvite>()) }
     var isLoading by remember { mutableStateOf(true) }
@@ -852,8 +1003,22 @@ fun ChatScreen(loginResponse: LoginResponse) {
     }
 
     Column(modifier = Modifier.padding(16.dp)) {
-        Text("FEVERDREAM", style = MaterialTheme.typography.h5)
-        Text("Logged in as: ${loginResponse.user_id}", style = MaterialTheme.typography.caption)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column {
+                Text("FEVERDREAM", style = MaterialTheme.typography.h5)
+                Text("Logged in as: ${loginResponse.user_id}", style = MaterialTheme.typography.caption)
+            }
+            Button(
+                onClick = onLogout,
+                colors = ButtonDefaults.buttonColors(backgroundColor = MaterialTheme.colors.error)
+            ) {
+                Text("Logout")
+            }
+        }
         Spacer(modifier = Modifier.height(16.dp))
 
         if (isLoading) {
