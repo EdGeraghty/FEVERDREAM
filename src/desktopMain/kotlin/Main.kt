@@ -99,7 +99,26 @@ data class EncryptedMessageContent(
 )
 
 @Serializable
-data class RoomEncryptionState(val algorithm: String = "m.megolm.v1.aes-sha2")
+data class ServerDelegationResponse(val server: String)
+
+suspend fun discoverHomeserver(domain: String): String {
+    try {
+        // Try to discover server delegation via .well-known
+        val wellKnownUrl = "https://$domain/.well-known/matrix/server"
+        val response = client.get(wellKnownUrl)
+
+        if (response.status == HttpStatusCode.OK) {
+            val delegation = response.body<ServerDelegationResponse>()
+            println("Found server delegation: $domain -> ${delegation.server}")
+            return delegation.server
+        }
+    } catch (e: Exception) {
+        println("No server delegation found for $domain: ${e.message}")
+    }
+
+    // Fallback to the domain itself
+    return "https://$domain"
+}
 
 @Serializable
 data class SendMessageRequest(val msgtype: String = "m.text", val body: String)
@@ -133,13 +152,10 @@ suspend fun login(username: String, password: String, homeserver: String): Login
             val parts = cleanUsername.split(":", limit = 2)
             val userPart = parts[0]
             val domainPart = parts[1]
-            // Handle cases where domain might already include protocol
-            val extractedHomeserver = when {
-                domainPart.startsWith("https://") -> domainPart
-                domainPart.startsWith("http://") -> domainPart.replace("http://", "https://")
-                else -> "https://$domainPart"
-            }
-            Pair(userPart, extractedHomeserver)
+
+            // Discover the actual homeserver (check for delegation)
+            val discoveredHomeserver = discoverHomeserver(domainPart)
+            Pair(userPart, discoveredHomeserver)
         } else {
             val userId = cleanUsername
             Pair(userId, cleanHomeserver)
@@ -173,7 +189,7 @@ suspend fun login(username: String, password: String, homeserver: String): Login
         } catch (e: Exception) {
             // If the extracted homeserver fails and it's different from the provided one, try the provided homeserver
             if (actualHomeserver != cleanHomeserver && e.message?.contains("400") == true) {
-                println("Login failed on extracted homeserver, trying provided homeserver: $cleanHomeserver")
+                println("Login failed on discovered homeserver $actualHomeserver, trying provided homeserver: $cleanHomeserver")
                 currentHomeserver = cleanHomeserver
 
                 val fallbackRequest = LoginRequestV2(
