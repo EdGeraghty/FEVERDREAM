@@ -666,7 +666,7 @@ suspend fun getRoomInvites(): List<RoomInvite> {
     return emptyList()
 }
 
-suspend fun syncAndProcessToDevice(): Boolean {
+suspend fun syncAndProcessToDevice(timeout: ULong = 30000UL): Boolean {
     val token = currentAccessToken ?: return false
     val machine = olmMachine ?: return false
 
@@ -674,7 +674,7 @@ suspend fun syncAndProcessToDevice(): Boolean {
         println("🔄 Starting sync to process to-device events...")
         val response = client.get("$currentHomeserver/_matrix/client/v3/sync") {
             bearerAuth(token)
-            parameter("timeout", "30000") // 30 second timeout for better responsiveness
+            parameter("timeout", timeout.toString()) // Use the timeout parameter
             parameter("filter", """{"room":{"timeline":{"limit":10},"state":{"limit":0},"ephemeral":{"limit":0}},"presence":{"limit":0},"account_data":{"limit":0},"receipts":{"limit":0}}""")
             // Use since token if we have one
             if (currentSyncToken.isNotBlank()) {
@@ -714,7 +714,7 @@ suspend fun syncAndProcessToDevice(): Boolean {
                 val decryptionSettings = DecryptionSettings(senderDeviceTrustRequirement = TrustRequirement.UNTRUSTED)
                 val syncChanges = machine.receiveSyncChanges(
                     events = toDeviceEventJsons.joinToString(",", "[", "]"), // Array format
-                    deviceChanges = org.matrix.rustcomponents.sdk.crypto.DeviceLists(emptyList(), emptyList()), // Empty device lists
+                    deviceChanges = DeviceLists(emptyList(), emptyList()), // Empty device lists
                     keyCounts = emptyMap<String, Int>(), // Empty key counts map
                     unusedFallbackKeys = null,
                     nextBatchToken = syncResponse.nextBatch ?: "",
@@ -904,7 +904,7 @@ suspend fun sendMessage(roomId: String, message: String): Boolean {
     val token = currentAccessToken ?: return false
     try {
         // Sync to process any incoming to-device events (room keys) before sending
-        val syncSuccess = syncAndProcessToDevice()
+        val syncSuccess = syncAndProcessToDevice(30000UL)
         if (!syncSuccess) {
             println("⚠️  Sync failed, but continuing with message send...")
         }
@@ -949,11 +949,48 @@ suspend fun sendMessage(roomId: String, message: String): Boolean {
                 machine.updateTrackedUsers(roomMembers)
                 println("✅ Marked ${roomMembers.size} users for tracking")
 
-                // Step 2: Sync to get the latest keys for tracked users
-                println("🔄 Syncing to get device keys...")
-                val keySyncResult = syncAndProcessToDevice()
-                if (!keySyncResult) {
-                    println("⚠️  Sync failed, but continuing with encryption...")
+                // Step 1.5: Force a keys query to get device keys for tracked users
+                println("🔑 Querying device keys for tracked users...")
+                val keysQueryRequest = machine.outgoingRequests()
+                for (request in keysQueryRequest) {
+                    when (request) {
+                        is Request.KeysQuery -> {
+                            println("📤 Sending keys query for tracked users")
+                            val keysQueryResponse = client.post("$currentHomeserver/_matrix/client/v3/keys/query") {
+                                bearerAuth(token)
+                                contentType(ContentType.Application.Json)
+                                val convertedUsers = convertMapToHashMap(request.users)
+                                if (convertedUsers is Map<*, *>) {
+                                    @Suppress("UNCHECKED_CAST")
+                                    val usersMap = convertedUsers as Map<String, Any>
+                                    val deviceKeys = usersMap.mapValues { JsonArray(emptyList<JsonElement>()) }
+                                    setBody(JsonObject(mapOf("device_keys" to JsonObject(deviceKeys))))
+                                } else {
+                                    setBody(JsonObject(mapOf("device_keys" to JsonObject(emptyMap()))))
+                                }
+                            }
+                            if (keysQueryResponse.status == HttpStatusCode.OK) {
+                                println("✅ Keys query sent for tracked users")
+                            } else {
+                                println("❌ Failed to query keys for tracked users: ${keysQueryResponse.status}")
+                            }
+                        }
+                        else -> {
+                            // Handle other requests if needed
+                        }
+                    }
+                }
+
+                // Step 2: Sync multiple times to get the latest keys for tracked users
+                println("🔄 Syncing multiple times to get device keys...")
+                repeat(3) { syncAttempt ->
+                    println("🔄 Device key sync attempt ${syncAttempt + 1}/3...")
+                    val keySyncResult = syncAndProcessToDevice(30000UL)
+                    if (!keySyncResult) {
+                        println("⚠️  Device key sync ${syncAttempt + 1} failed, but continuing...")
+                    }
+                    // Small delay between syncs
+                    kotlinx.coroutines.delay(1000)
                 }
 
                 // Step 3: Check for missing sessions and establish them
@@ -961,6 +998,20 @@ suspend fun sendMessage(roomId: String, message: String): Boolean {
                 val missingSessions = machine.getMissingSessions(roomMembers)
                 val missingSessionsCount = (missingSessions as? Collection<*>)?.size ?: 0
                 println("🔑 Missing sessions for $missingSessionsCount users")
+
+                // Debug: Check what devices we have for each user
+                for (userId in roomMembers) {
+                    try {
+                        val userDevices = machine.getUserDevices(userId, 30000U)
+                        println("🔍 User $userId has ${userDevices.size} devices")
+                        // Print device IDs if available
+                        if (userDevices.isNotEmpty()) {
+                            println("🔍 Device IDs: ${userDevices.joinToString(", ")}")
+                        }
+                    } catch (e: Exception) {
+                        println("🔍 Could not get devices for $userId: ${e.message}")
+                    }
+                }
 
                 if (missingSessionsCount > 0) {
                     println("🔑 Establishing Olm sessions with room members...")
@@ -1043,9 +1094,60 @@ suspend fun sendMessage(roomId: String, message: String): Boolean {
                     errorOnVerifiedUserProblem = false
                 )
 
-                println("🔐 Sharing room key with ${roomMembers.size} members...")
-                val roomKeyRequests = machine.shareRoomKey(roomId, roomMembers, encryptionSettings)
+                // Check if we have devices for all room members before sharing keys
+                val usersWithDevices = roomMembers.filter { userId ->
+                    try {
+                        val userDevices = machine.getUserDevices(userId, 30000U)
+                        userDevices.isNotEmpty()
+                    } catch (e: Exception) {
+                        false
+                    }
+                }
+
+                println("🔐 Users with available devices: ${usersWithDevices.size}/${roomMembers.size}")
+                if (usersWithDevices.size < roomMembers.size) {
+                    println("⚠️  Not all room members have devices available, but proceeding with available devices...")
+                }
+
+                println("🔐 Sharing room key with ${usersWithDevices.size} members...")
+                val roomKeyRequests = machine.shareRoomKey(roomId, usersWithDevices, encryptionSettings)
                 println("🔐 Room key requests generated: ${roomKeyRequests.size}")
+
+                // If no room key requests were generated, try with all members anyway
+                if (roomKeyRequests.isEmpty() && usersWithDevices.size < roomMembers.size) {
+                    println("🔐 Retrying room key sharing with all members...")
+                    val retryRoomKeyRequests = machine.shareRoomKey(roomId, roomMembers, encryptionSettings)
+                    println("🔐 Retry room key requests generated: ${retryRoomKeyRequests.size}")
+                    // Use retry results if they exist
+                    if (retryRoomKeyRequests.isNotEmpty()) {
+                        // Process retry requests
+                        for (request in retryRoomKeyRequests) {
+                            when (request) {
+                                is Request.ToDevice -> {
+                                    println("📤 Sending retry room key to-device request: ${request.eventType}")
+                                    val roomKeyResponse = client.put("$currentHomeserver/_matrix/client/v3/sendToDevice/${request.eventType}/${System.currentTimeMillis()}") {
+                                        bearerAuth(token)
+                                        contentType(ContentType.Application.Json)
+                                        val body = convertMapToHashMap(request.body)
+                                        if (body is Map<*, *>) {
+                                            @Suppress("UNCHECKED_CAST")
+                                            val mapBody = body as Map<String, Any>
+                                            setBody(JsonObject(mapBody.mapValues { anyToJsonElement(it.value) }))
+                                        } else if (body is String) {
+                                            setBody(json.parseToJsonElement(body))
+                                        }
+                                    }
+                                    if (roomKeyResponse.status != HttpStatusCode.OK) {
+                                        println("❌ Failed to send retry room key: ${roomKeyResponse.status}")
+                                    }
+                                }
+                                else -> {
+                                    println("⚠️  Unhandled retry room key request type: ${request::class.simpleName}")
+                                }
+                            }
+                        }
+                    }
+                }
 
                 // Send room key sharing requests
                 for (request in roomKeyRequests) {
@@ -1143,7 +1245,10 @@ suspend fun sendMessage(roomId: String, message: String): Boolean {
 
                 // Step 6: Final sync to ensure all keys are processed
                 println("🔄 Final sync before encryption...")
-                syncAndProcessToDevice()
+                val syncResult = syncAndProcessToDevice(30000UL)
+                if (!syncResult) {
+                    println("⚠️  Final sync failed, but continuing...")
+                }
 
                 // Step 7: Encrypt the message
                 println("� Encrypting message...")
@@ -1387,7 +1492,7 @@ suspend fun startPeriodicSync() {
             // Sync every 10 seconds to keep receiving to-device events more frequently
             kotlinx.coroutines.delay(10000)
             if (currentAccessToken != null && olmMachine != null) {
-                val syncResult = syncAndProcessToDevice()
+                val syncResult = syncAndProcessToDevice(30000UL)
                 if (syncResult) {
                     println("🔄 Periodic sync completed successfully")
                 } else {
@@ -1787,7 +1892,7 @@ fun ChatWindow(roomId: String, onClose: () -> Unit) {
         isLoading = true
         scope.launch {
             // Sync to get latest keys before loading messages
-            syncAndProcessToDevice()
+            syncAndProcessToDevice(30000UL)
             messages = getRoomMessages(roomId)
             isEncrypted = isRoomEncrypted(roomId)
 
@@ -1795,7 +1900,7 @@ fun ChatWindow(roomId: String, onClose: () -> Unit) {
             if (isEncrypted) {
                 ensureRoomEncryption(roomId)
                 // Sync again after setting up encryption
-                syncAndProcessToDevice()
+                syncAndProcessToDevice(30000UL)
                 messages = getRoomMessages(roomId)
             }
 
@@ -1869,7 +1974,7 @@ fun ChatWindow(roomId: String, onClose: () -> Unit) {
                                 if (sendMessage(roomId, newMessage)) {
                                     newMessage = ""
                                     // Sync and refresh messages after sending
-                                    syncAndProcessToDevice()
+                                    syncAndProcessToDevice(30000UL)
                                     messages = getRoomMessages(roomId)
                                 }
                             }
