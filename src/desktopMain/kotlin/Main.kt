@@ -105,24 +105,81 @@ data class EncryptedMessageContent(
 )
 
 @Serializable
-data class ServerDelegationResponse(val server: String)
+data class ServerDelegationResponse(
+    @SerialName("m.server")
+    val mServer: String? = null
+)
 
 suspend fun discoverHomeserver(domain: String): String {
     try {
         // Try to discover server delegation via .well-known
         val wellKnownUrl = "https://$domain/.well-known/matrix/server"
+        println("Checking for server delegation at: $wellKnownUrl")
+
         val response = client.get(wellKnownUrl)
 
+        println("Server delegation response status: ${response.status}")
+
         if (response.status == HttpStatusCode.OK) {
-            val delegation = response.body<ServerDelegationResponse>()
-            println("Found server delegation: $domain -> ${delegation.server}")
-            return delegation.server
+            val responseText = response.body<String>()
+            println("Server delegation response body: $responseText")
+
+            try {
+                val delegation = Json.decodeFromString<ServerDelegationResponse>(responseText)
+                val serverValue = delegation.mServer
+
+                if (serverValue != null) {
+                    // Handle server value that might include port
+                    val actualServer = if (serverValue.contains(":")) {
+                        val parts = serverValue.split(":", limit = 2)
+                        val serverHost = parts[0]
+                        val serverPort = parts[1]
+                        if (serverPort == "443") {
+                            "https://$serverHost"
+                        } else {
+                            "https://$serverHost:$serverPort"
+                        }
+                    } else {
+                        "https://$serverValue"
+                    }
+
+                    println("Found server delegation: $domain -> $actualServer")
+                    return actualServer
+                }
+            } catch (e: Exception) {
+                println("Failed to parse server delegation response: ${e.message}")
+            }
+
+            // Try to parse as plain text fallback
+            if (responseText.contains("m.server")) {
+                val serverMatch = Regex("\"m\\.server\"\\s*:\\s*\"([^\"]+)\"").find(responseText)
+                if (serverMatch != null) {
+                    val serverValue = serverMatch.groupValues[1]
+                    val actualServer = if (serverValue.contains(":")) {
+                        val parts = serverValue.split(":", limit = 2)
+                        val serverHost = parts[0]
+                        val serverPort = parts[1]
+                        if (serverPort == "443") {
+                            "https://$serverHost"
+                        } else {
+                            "https://$serverHost:$serverPort"
+                        }
+                    } else {
+                        "https://$serverValue"
+                    }
+                    println("Parsed server delegation from regex: $domain -> $actualServer")
+                    return actualServer
+                }
+            }
+        } else {
+            println("Server delegation not found (status: ${response.status})")
         }
     } catch (e: Exception) {
-        println("No server delegation found for $domain: ${e.message}")
+        println("Error checking server delegation for $domain: ${e.message}")
     }
 
     // Fallback to the domain itself
+    println("Using fallback homeserver: https://$domain")
     return "https://$domain"
 }
 
