@@ -37,9 +37,7 @@ val json = Json {
     encodeDefaults = true
     isLenient = true
     serializersModule = SerializersModule {
-        polymorphic(Map::class) {
-            default { MapSerializer(String.serializer(), JsonElement.serializer()) }
-        }
+        contextual(Map::class) { MapSerializer(String.serializer(), JsonElement.serializer()) }
     }
 }
 
