@@ -29,6 +29,7 @@ import java.io.File
 import org.matrix.rustcomponents.sdk.crypto.*
 import uniffi.matrix_sdk_crypto.CollectStrategy
 import uniffi.matrix_sdk_crypto.DecryptionSettings
+import uniffi.matrix_sdk_crypto.TrustRequirement
 
 import kotlinx.serialization.modules.*
 
@@ -673,7 +674,39 @@ suspend fun getRoomMessages(roomId: String): List<Event> {
         }
         if (response.status == HttpStatusCode.OK) {
             val messagesResponse = response.body<RoomMessagesResponse>()
-            return messagesResponse.chunk.reversed()
+            val messages = messagesResponse.chunk.reversed()
+
+            // Decrypt encrypted messages
+            val machine = olmMachine
+            if (machine != null) {
+                val decryptedMessages = messages.map { event ->
+                    if (event.type == "m.room.encrypted") {
+                        try {
+                            val eventJson = json.encodeToString(event)
+                            val decryptionSettings = DecryptionSettings(senderDeviceTrustRequirement = TrustRequirement.UNTRUSTED)
+                            val decrypted = machine.decryptRoomEvent(
+                                roomId = roomId,
+                                event = eventJson,
+                                decryptionSettings = decryptionSettings,
+                                handleVerificationEvents = false,
+                                strictShields = false
+                            )
+                            json.decodeFromString<Event>(decrypted.clearEvent)
+                        } catch (e: Exception) {
+                            // If decryption fails, create a message with error
+                            event.copy(
+                                type = "m.room.message",
+                                content = json.parseToJsonElement("""{"msgtype": "m.bad.encrypted", "body": "** Unable to decrypt: ${e.message} **"}""")
+                            )
+                        }
+                    } else {
+                        event
+                    }
+                }
+                return decryptedMessages
+            } else {
+                return messages
+            }
         }
     } catch (e: Exception) {
         println("Get messages failed: ${e.message}")
@@ -1302,32 +1335,13 @@ fun MessageItem(message: Event) {
         "m.room.message" -> {
             try {
                 val content = json.decodeFromJsonElement<MessageContent>(message.content)
-                content.body
+                when (content.msgtype) {
+                    "m.text" -> content.body
+                    "m.bad.encrypted" -> content.body
+                    else -> "[${content.msgtype}] ${content.body}"
+                }
             } catch (e: Exception) {
                 "[Unable to parse message]"
-            }
-        }
-        "m.room.encrypted" -> {
-            try {
-                val encryptedContent = json.decodeFromJsonElement<EncryptedMessageContent>(message.content)
-
-                when (encryptedContent.algorithm) {
-                    "m.megolm.v1.aes-sha2" -> {
-                        // For Megolm, we need the session key to decrypt
-                        // In a real implementation, this would be shared via Olm
-                        "🔒 [Megolm encrypted message - decryption implemented with vodozemac]"
-                    }
-                    "m.olm.v1.curve25519-aes-sha2" -> {
-                        // For Olm 1:1 messages
-                        "🔒 [Olm encrypted message - decryption implemented with vodozemac]"
-                    }
-                    else -> {
-                        "🔒 [Unsupported encryption algorithm: ${encryptedContent.algorithm}]"
-                    }
-                }
-
-            } catch (e: Exception) {
-                "🔒 [Encrypted message - decryption error: ${e.message}]"
             }
         }
         else -> "[${message.type}]"
