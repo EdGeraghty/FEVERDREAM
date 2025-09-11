@@ -43,11 +43,22 @@ compose.desktop {
 tasks.register("ensureNativeLibs") {
     doLast {
         val resourcesDir = file("src/desktopMain/resources")
-        val macosArm64Dir = file("$resourcesDir/macos-arm64")
-        val dylibFile = file("$macosArm64Dir/libmatrix_sdk_crypto_ffi.dylib")
+        val osName = System.getProperty("os.name").lowercase()
+        val arch = System.getProperty("os.arch").lowercase()
         
-        if (!dylibFile.exists()) {
-            throw GradleException("Native library not found: $dylibFile. Please ensure the matrix-sdk-crypto-ffi library is built and available.")
+        val (platformDir, libName) = when {
+            osName.contains("mac") && arch.contains("aarch64") -> "macos-arm64" to "libmatrix_sdk_crypto_ffi.dylib"
+            osName.contains("mac") -> "macos-x86_64" to "libmatrix_sdk_crypto_ffi.dylib"
+            osName.contains("win") -> "win32-x86-64" to "matrix_sdk_crypto_ffi.dll"
+            osName.contains("linux") -> "linux-x86_64" to "libmatrix_sdk_crypto_ffi.so"
+            else -> throw GradleException("Unsupported OS: $osName")
+        }
+        
+        val libDir = file("$resourcesDir/$platformDir")
+        val libFile = file("$libDir/$libName")
+        
+        if (!libFile.exists()) {
+            throw GradleException("Native library not found: $libFile. Please ensure the matrix-sdk-crypto-ffi library is built and available.")
         }
     }
 }
