@@ -113,7 +113,28 @@ fun LoginScreen(
 ) {
     var username by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
-    var homeserver by remember { mutableStateOf("matrix.org") }
+    var homeserver by remember { mutableStateOf("") }
+    var detectedServer by remember { mutableStateOf<String?>(null) }
+    var showServerField by remember { mutableStateOf(false) }
+
+    // Auto-detect server from username
+    LaunchedEffect(username) {
+        if (username.isNotEmpty()) {
+            val cleanUsername = username.removePrefix("@")
+            if (cleanUsername.contains(":")) {
+                val domain = cleanUsername.split(":").last()
+                detectedServer = "https://$domain"
+            } else if (detectedServer == null) {
+                detectedServer = "https://matrix.org"
+            }
+        }
+    }
+
+    val effectiveHomeserver = when {
+        homeserver.isNotBlank() -> homeserver
+        detectedServer != null -> detectedServer!!
+        else -> "matrix.org"
+    }
 
     Column(
         modifier = Modifier
@@ -130,6 +151,7 @@ fun LoginScreen(
             value = username,
             onValueChange = { username = it },
             label = { Text("Username") },
+            placeholder = { Text("user or user:server.com") },
             modifier = Modifier.fillMaxWidth(0.5f)
         )
         Spacer(modifier = Modifier.height(16.dp))
@@ -143,20 +165,45 @@ fun LoginScreen(
         )
         Spacer(modifier = Modifier.height(16.dp))
 
-        OutlinedTextField(
-            value = homeserver,
-            onValueChange = { homeserver = it },
-            label = { Text("Homeserver") },
-            modifier = Modifier.fillMaxWidth(0.5f)
-        )
+        // Server detection info
+        if (detectedServer != null && !showServerField) {
+            Row(
+                modifier = Modifier.fillMaxWidth(0.5f),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    "Server: ${detectedServer?.removePrefix("https://")}",
+                    style = MaterialTheme.typography.body2,
+                    color = MaterialTheme.colors.primary
+                )
+                Spacer(modifier = Modifier.weight(1f))
+                TextButton(onClick = { showServerField = true }) {
+                    Text("Change", style = MaterialTheme.typography.caption)
+                }
+            }
+        }
+
+        // Server field (shown when user wants to change or if no detection)
+        if (showServerField || detectedServer == null) {
+            Spacer(modifier = Modifier.height(16.dp))
+            OutlinedTextField(
+                value = homeserver,
+                onValueChange = { homeserver = it },
+                label = { Text("Homeserver (optional)") },
+                placeholder = { Text("matrix.org or https://your-server.com") },
+                modifier = Modifier.fillMaxWidth(0.5f)
+            )
+        }
+
         Spacer(modifier = Modifier.height(16.dp))
 
         if (isLoading) {
             CircularProgressIndicator()
         } else {
             Button(
-                onClick = { onLogin(username, password, homeserver) },
-                modifier = Modifier.fillMaxWidth(0.3f)
+                onClick = { onLogin(username, password, effectiveHomeserver) },
+                modifier = Modifier.fillMaxWidth(0.3f),
+                enabled = username.isNotBlank() && password.isNotBlank()
             ) {
                 Text("Login")
             }

@@ -153,12 +153,25 @@ suspend fun discoverHomeserver(domain: String): String {
 
 suspend fun login(username: String, password: String, homeserver: String): LoginResponse? {
     try {
-        val cleanHomeserver = if (homeserver.startsWith("http://")) {
-            homeserver.replace("http://", "https://")
-        } else if (!homeserver.startsWith("https://")) {
-            "https://$homeserver"
-        } else {
-            homeserver
+        // Handle empty homeserver with smart defaults
+        val cleanHomeserver = when {
+            homeserver.isBlank() -> {
+                // Try to extract from username first
+                val cleanUsername = username.removePrefix("@")
+                if (cleanUsername.contains(":")) {
+                    val domain = cleanUsername.split(":").last()
+                    "https://$domain"
+                } else {
+                    "https://matrix.org" // Default fallback
+                }
+            }
+            homeserver.startsWith("http://") -> {
+                homeserver.replace("http://", "https://")
+            }
+            !homeserver.startsWith("https://") -> {
+                "https://$homeserver"
+            }
+            else -> homeserver
         }
 
         val cleanUsername = username.removePrefix("@")
@@ -181,7 +194,10 @@ suspend fun login(username: String, password: String, homeserver: String): Login
         val finalHomeserver = actualHomeserver
         currentHomeserver = finalHomeserver
 
-        println("Attempting login with user: $userId on homeserver: $finalHomeserver")
+        println("🔍 Login attempt:")
+        println("   User: $userId")
+        println("   Server: $finalHomeserver")
+        println("   Auto-detected: ${cleanUsername.contains(":")}")
 
         // Try login with the determined homeserver
         try {
@@ -190,21 +206,23 @@ suspend fun login(username: String, password: String, homeserver: String): Login
                 password = password
             )
 
-            println("Sending login request: ${json.encodeToString(loginRequest)}")
+            println("📤 Sending login request...")
 
             val response = client.post("$finalHomeserver/_matrix/client/v3/login") {
                 contentType(ContentType.Application.Json)
                 setBody(json.encodeToString(loginRequest))
             }
 
-            println("Login response status: ${response.status}")
+            println("📥 Login response: ${response.status}")
 
             if (response.status == HttpStatusCode.OK) {
                 val loginResponse = response.body<LoginResponse>()
                 currentAccessToken = loginResponse.access_token
                 currentDeviceId = loginResponse.device_id
                 currentUserId = loginResponse.user_id
-                println("🔑 Logged in with device ID: ${currentDeviceId}")
+                println("✅ Logged in successfully!")
+                println("   Device ID: ${currentDeviceId}")
+                println("   User ID: ${currentUserId}")
                 // Initialize encryption system after successful login
                 initializeEncryption(loginResponse.user_id, loginResponse.device_id)
                 // Save session data
@@ -270,8 +288,12 @@ suspend fun login(username: String, password: String, homeserver: String): Login
 
             // If the login failed and we discovered a homeserver (not using the original domain),
             // and the user didn't provide a specific homeserver, don't try fallback
-            val originalDomainHomeserver = "https://${userId.split(":").getOrNull(1) ?: ""}"
-            if (actualHomeserver != originalDomainHomeserver && cleanHomeserver.isBlank()) {
+            val originalDomainHomeserver = if (cleanUsername.contains(":")) {
+                "https://${cleanUsername.split(":").last()}"
+            } else {
+                ""
+            }
+            if (actualHomeserver != originalDomainHomeserver && homeserver.isBlank()) {
                 println("Not attempting fallback since homeserver was auto-discovered and user didn't specify one")
                 throw e
             }
