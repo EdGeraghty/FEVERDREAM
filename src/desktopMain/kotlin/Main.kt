@@ -4,6 +4,9 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.ArrowForward
 import androidx.compose.runtime.*
 import androidx.compose.ui.*
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -1562,9 +1565,6 @@ suspend fun ensureRoomEncryption(roomId: String): Boolean {
         println("❌ Failed to ensure room encryption for $roomId: ${e.message}")
         return false
     }
-}
-
-suspend fun requestMissingKeys(roomId: String): Boolean {
     val token = currentAccessToken ?: return false
     val machine = olmMachine ?: return false
 
@@ -1740,63 +1740,380 @@ suspend fun startPeriodicSync() {
 }
 
 fun main() = application {
-    Window(onCloseRequest = { exitProcess(0) }, title = "FEVERDREAM - Vodozemac Test") {
-        TestVodozemacApp()
+    Window(onCloseRequest = { exitProcess(0) }, title = "FEVERDREAM - Matrix Client") {
+        MatrixApp()
     }
 }
 
 @Composable
 @Preview
-fun TestVodozemacApp() {
+fun MatrixApp() {
     val scope = rememberCoroutineScope()
-    var testResult by remember { mutableStateOf<String?>(null) }
-    var isTesting by remember { mutableStateOf(false) }
+    var currentScreen by remember { mutableStateOf<Screen>(Screen.Login) }
+    var loginError by remember { mutableStateOf<String?>(null) }
+    var isLoading by remember { mutableStateOf(false) }
 
-    // Run test on launch
+    // Load session on startup
     LaunchedEffect(Unit) {
-        isTesting = true
-        scope.launch {
-            try {
-                testVodozemac()
-                testResult = "✅ Vodozemac uniffi bindings loaded successfully!"
-            } catch (e: Exception) {
-                testResult = "❌ Error: ${e.message}"
-                e.printStackTrace()
-            } finally {
-                isTesting = false
-            }
+        val session = loadSession()
+        if (session != null && validateSession(session)) {
+            currentUserId = session.userId
+            currentDeviceId = session.deviceId
+            currentAccessToken = session.accessToken
+            currentHomeserver = session.homeserver
+            currentSyncToken = session.syncToken
+            initializeEncryption(session.userId, session.deviceId)
+            currentScreen = Screen.Rooms
+            // Start periodic sync
+            scope.launch { startPeriodicSync() }
         }
     }
 
     MaterialTheme {
-        Column(
-            modifier = Modifier.fillMaxSize(),
-            verticalArrangement = Arrangement.Center,
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Text("FEVERDREAM", style = MaterialTheme.typography.h4)
-            Text("Testing Vodozemac Uniffi Bindings", style = MaterialTheme.typography.subtitle1)
-            Spacer(modifier = Modifier.height(32.dp))
+        when (currentScreen) {
+            is Screen.Login -> LoginScreen(
+                onLogin = { username, password, homeserver ->
+                    scope.launch {
+                        isLoading = true
+                        loginError = null
+                        try {
+                            val result = login(username, password, homeserver)
+                            if (result != null) {
+                                currentScreen = Screen.Rooms
+                                // Start periodic sync
+                                scope.launch { startPeriodicSync() }
+                            } else {
+                                loginError = "Login failed"
+                            }
+                        } catch (e: Exception) {
+                            loginError = e.message ?: "Login failed"
+                        } finally {
+                            isLoading = false
+                        }
+                    }
+                },
+                error = loginError,
+                isLoading = isLoading
+            )
+            is Screen.Rooms -> RoomsScreen(
+                onRoomSelected = { roomId -> currentScreen = Screen.Chat(roomId) },
+                onLogout = {
+                    scope.launch {
+                        clearSession()
+                        currentAccessToken = null
+                        currentUserId = null
+                        currentDeviceId = null
+                        olmMachine = null
+                        currentScreen = Screen.Login
+                    }
+                }
+            )
+            is Screen.Chat -> {
+                val roomId = (currentScreen as Screen.Chat).roomId
+                ChatScreen(
+                    roomId = roomId,
+                    onBack = { currentScreen = Screen.Rooms }
+                )
+            }
+        }
+    }
+}
 
-            if (isTesting) {
+@Composable
+fun LoginScreen(
+    onLogin: (String, String, String) -> Unit,
+    error: String? = null,
+    isLoading: Boolean = false
+) {
+    var username by remember { mutableStateOf("") }
+    var password by remember { mutableStateOf("") }
+    var homeserver by remember { mutableStateOf("matrix.org") }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(32.dp),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Text("FEVERDREAM", style = MaterialTheme.typography.h4)
+        Text("Matrix Client", style = MaterialTheme.typography.subtitle1)
+        Spacer(modifier = Modifier.height(32.dp))
+
+        OutlinedTextField(
+            value = username,
+            onValueChange = { username = it },
+            label = { Text("Username") },
+            modifier = Modifier.fillMaxWidth(0.5f)
+        )
+        Spacer(modifier = Modifier.height(16.dp))
+
+        OutlinedTextField(
+            value = password,
+            onValueChange = { password = it },
+            label = { Text("Password") },
+            visualTransformation = PasswordVisualTransformation(),
+            modifier = Modifier.fillMaxWidth(0.5f)
+        )
+        Spacer(modifier = Modifier.height(16.dp))
+
+        OutlinedTextField(
+            value = homeserver,
+            onValueChange = { homeserver = it },
+            label = { Text("Homeserver") },
+            modifier = Modifier.fillMaxWidth(0.5f)
+        )
+        Spacer(modifier = Modifier.height(16.dp))
+
+        if (isLoading) {
+            CircularProgressIndicator()
+        } else {
+            Button(
+                onClick = { onLogin(username, password, homeserver) },
+                modifier = Modifier.fillMaxWidth(0.3f)
+            ) {
+                Text("Login")
+            }
+        }
+
+        error?.let {
+            Spacer(modifier = Modifier.height(16.dp))
+            Text(it, color = MaterialTheme.colors.error)
+        }
+    }
+}
+
+@Composable
+fun RoomsScreen(
+    onRoomSelected: (String) -> Unit,
+    onLogout: () -> Unit
+) {
+    val scope = rememberCoroutineScope()
+    var rooms by remember { mutableStateOf<List<String>>(emptyList()) }
+    var invites by remember { mutableStateOf<List<RoomInvite>>(emptyList()) }
+    var isLoading by remember { mutableStateOf(true) }
+
+    LaunchedEffect(Unit) {
+        scope.launch {
+            rooms = getJoinedRooms()
+            invites = getRoomInvites()
+            isLoading = false
+        }
+    }
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        TopAppBar(
+            title = { Text("Rooms") },
+            actions = {
+                Button(onClick = onLogout) {
+                    Text("Logout")
+                }
+            }
+        )
+
+        if (isLoading) {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator()
-                Spacer(modifier = Modifier.height(16.dp))
-                Text("Testing native library loading...")
-            } else {
-                testResult?.let { result ->
-                    Text(
-                        text = result,
-                        style = MaterialTheme.typography.body1,
-                        color = if (result.startsWith("✅")) MaterialTheme.colors.primary else MaterialTheme.colors.error
-                    )
+            }
+        } else {
+            LazyColumn(modifier = Modifier.fillMaxSize()) {
+                if (invites.isNotEmpty()) {
+                    item {
+                        Text("Room Invites", style = MaterialTheme.typography.h6, modifier = Modifier.padding(16.dp))
+                    }
+                    items(invites) { invite ->
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 4.dp),
+                            elevation = 4.dp
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(16.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text("Invite from ${invite.sender}")
+                                    Text(invite.roomId, style = MaterialTheme.typography.caption)
+                                }
+                                Row {
+                                    Button(
+                                        onClick = {
+                                            scope.launch {
+                                                if (acceptRoomInvite(invite.roomId)) {
+                                                    rooms = getJoinedRooms()
+                                                    invites = getRoomInvites()
+                                                }
+                                            }
+                                        }
+                                    ) {
+                                        Text("Accept")
+                                    }
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Button(
+                                        onClick = {
+                                            scope.launch {
+                                                rejectRoomInvite(invite.roomId)
+                                                invites = getRoomInvites()
+                                            }
+                                        }
+                                    ) {
+                                        Text("Reject")
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                item {
+                    Text("Joined Rooms", style = MaterialTheme.typography.h6, modifier = Modifier.padding(16.dp))
+                }
+                items(rooms) { roomId ->
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 4.dp)
+                            .clickable { onRoomSelected(roomId) },
+                        elevation = 4.dp
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(roomId)
+                                val isEncrypted = runBlocking { isRoomEncrypted(roomId) }
+                                if (isEncrypted) {
+                                    Text("🔒 Encrypted", style = MaterialTheme.typography.caption, color = MaterialTheme.colors.primary)
+                                }
+                            }
+                            Icon(Icons.Default.ArrowForward, contentDescription = "Enter room")
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun ChatScreen(
+    roomId: String,
+    onBack: () -> Unit
+) {
+    val scope = rememberCoroutineScope()
+    var messages by remember { mutableStateOf<List<Event>>(emptyList()) }
+    var newMessage by remember { mutableStateOf("") }
+    var isLoading by remember { mutableStateOf(true) }
+    var isSending by remember { mutableStateOf(false) }
+    val listState = rememberLazyListState()
+
+    LaunchedEffect(roomId) {
+        scope.launch {
+            messages = getRoomMessages(roomId)
+            isLoading = false
+        }
+    }
+
+    // Auto-scroll to bottom when new messages arrive
+    LaunchedEffect(messages.size) {
+        if (messages.isNotEmpty()) {
+            listState.animateScrollToItem(messages.size - 1)
+        }
+    }
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        TopAppBar(
+            title = { Text(roomId) },
+            navigationIcon = {
+                IconButton(onClick = onBack) {
+                    Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                }
+            }
+        )
+
+        if (isLoading) {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator()
+            }
+        } else {
+            LazyColumn(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth(),
+                state = listState
+            ) {
+                items(messages) { event ->
+                    val isOwnMessage = event.sender == currentUserId
+                    val messageContent = event.content as? JsonObject
+                    val body = messageContent?.get("body")?.jsonPrimitive?.content ?: ""
+                    val msgtype = messageContent?.get("msgtype")?.jsonPrimitive?.content ?: "m.text"
+
+                    if (msgtype == "m.text" || msgtype == "m.bad.encrypted") {
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 4.dp),
+                            elevation = 2.dp,
+                            backgroundColor = if (isOwnMessage) MaterialTheme.colors.primary else MaterialTheme.colors.surface
+                        ) {
+                            Column(modifier = Modifier.padding(12.dp)) {
+                                Text(
+                                    event.sender,
+                                    style = MaterialTheme.typography.caption,
+                                    color = if (isOwnMessage) MaterialTheme.colors.onPrimary else MaterialTheme.colors.onSurface
+                                )
+                                Text(
+                                    body,
+                                    color = if (isOwnMessage) MaterialTheme.colors.onPrimary else MaterialTheme.colors.onSurface
+                                )
+                            }
+                        }
+                    }
                 }
             }
 
-            Spacer(modifier = Modifier.height(32.dp))
-            Text(
-                text = "If successful, the vodozemac uniffi bindings are working correctly on macOS!",
-                style = MaterialTheme.typography.caption
-            )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                OutlinedTextField(
+                    value = newMessage,
+                    onValueChange = { newMessage = it },
+                    label = { Text("Message") },
+                    modifier = Modifier.weight(1f),
+                    enabled = !isSending
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                if (isSending) {
+                    CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                } else {
+                    Button(
+                        onClick = {
+                            if (newMessage.isNotBlank()) {
+                                scope.launch {
+                                    isSending = true
+                                    if (sendMessage(roomId, newMessage)) {
+                                        newMessage = ""
+                                        // Refresh messages
+                                        messages = getRoomMessages(roomId)
+                                    }
+                                    isSending = false
+                                }
+                            }
+                        }
+                    ) {
+                        Text("Send")
+                    }
+                }
+            }
         }
     }
 }
