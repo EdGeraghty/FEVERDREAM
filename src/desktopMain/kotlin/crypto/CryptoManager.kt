@@ -232,6 +232,92 @@ suspend fun ensureRoomEncryption(roomId: String): Boolean {
 
         // Get room members
         val allRoomMembers = getRoomMembers(roomId)
+        println("🔍 Room members: $allRoomMembers")
+
+        // Update tracked users to ensure OlmMachine knows about them
+        machine.updateTrackedUsers(allRoomMembers)
+
+        // Send any outgoing requests (like keys query) before sharing room key
+        val initialRequests = machine.outgoingRequests()
+        for (request in initialRequests) {
+            when (request) {
+                is Request.KeysQuery -> {
+                    val keysQueryResponse = client.post("$currentHomeserver/_matrix/client/v3/keys/query") {
+                        bearerAuth(token)
+                        contentType(ContentType.Application.Json)
+                        val convertedUsers = convertMapToHashMap(request.users)
+                        if (convertedUsers is Map<*, *>) {
+                            @Suppress("UNCHECKED_CAST")
+                            val usersMap = convertedUsers as Map<String, Any>
+                            val deviceKeys = mutableMapOf<String, JsonElement>()
+                            for ((user, devicesAny) in usersMap) {
+                                val devices = devicesAny as? List<String> ?: emptyList()
+                                val jsonDevices = devices.map { kotlinx.serialization.json.JsonPrimitive(it) }
+                                deviceKeys[user] = JsonArray(jsonDevices)
+                            }
+                            setBody(JsonObject(mapOf("device_keys" to JsonObject(deviceKeys))))
+                        } else {
+                            setBody(JsonObject(mapOf("device_keys" to JsonObject(emptyMap()))))
+                        }
+                    }
+                    if (keysQueryResponse.status == HttpStatusCode.OK) {
+                        val keysResponseText = keysQueryResponse.body<String>()
+                        val keysJson = json.parseToJsonElement(keysResponseText)
+                        val deviceKeysJson = keysJson.jsonObject["device_keys"]?.jsonObject ?: JsonObject(emptyMap())
+                        val events = mutableListOf<String>()
+                        val changedUsersList = mutableListOf<String>()
+                        for ((user, devices) in deviceKeysJson) {
+                            changedUsersList.add(user)
+                            val devicesMap = devices.jsonObject
+                            for ((device, deviceInfo) in devicesMap) {
+                                val event = json.encodeToString(JsonObject(mapOf(
+                                    "type" to JsonPrimitive("m.device_key_update"),
+                                    "sender" to JsonPrimitive(user),
+                                    "content" to deviceInfo
+                                )))
+                                events.add(event)
+                            }
+                        }
+                        val deviceChanges = DeviceLists(changed = changedUsersList, left = emptyList())
+                        val syncChanges = machine.receiveSyncChanges(
+                            events = events.joinToString(",", "[", "]"),
+                            deviceChanges = deviceChanges,
+                            keyCounts = emptyMap(),
+                            unusedFallbackKeys = null,
+                            nextBatchToken = "",
+                            decryptionSettings = DecryptionSettings(senderDeviceTrustRequirement = TrustRequirement.UNTRUSTED)
+                        )
+                        println("✅ Processed initial keys query response: ${syncChanges.roomKeyInfos.size} room keys, ${changedUsersList.size} users updated")
+                    } else {
+                        println("❌ Failed to send initial keys query: ${keysQueryResponse.status}")
+                    }
+                }
+                is Request.KeysUpload -> {
+                    val response = client.post("$currentHomeserver/_matrix/client/v3/keys/upload") {
+                        bearerAuth(token)
+                        contentType(ContentType.Application.Json)
+                        val body = convertMapToHashMap(request.body)
+                        if (body is Map<*, *>) {
+                            @Suppress("UNCHECKED_CAST")
+                            val mapBody = body as Map<String, Any>
+                            setBody(JsonObject(mapBody.mapValues { anyToJsonElement(it.value) }))
+                        } else if (body is String) {
+                            setBody(json.parseToJsonElement(body))
+                        }
+                    }
+                    if (response.status == HttpStatusCode.OK) {
+                        println("✅ Initial keys uploaded")
+                    }
+                }
+                else -> {
+                    println("⚠️  Unhandled initial request type: ${request::class.simpleName}")
+                }
+            }
+        }
+
+        // Sync to get device keys
+        syncAndProcessToDevice(30000UL)
+
         val roomMembers = allRoomMembers.filter { it != currentUserId }
 
         if (roomMembers.isEmpty()) {
@@ -252,28 +338,60 @@ suspend fun ensureRoomEncryption(roomId: String): Boolean {
         val roomKeyRequests = machine.shareRoomKey(roomId, roomMembers, encryptionSettings)
         println("🔐 Room key requests for setup: ${roomKeyRequests.size}")
 
-        // Send room key requests
-        for (request in roomKeyRequests) {
-            when (request) {
-                is Request.ToDevice -> {
-                    val response = client.put("$currentHomeserver/_matrix/client/v3/sendToDevice/${request.eventType}/${System.currentTimeMillis()}") {
-                        bearerAuth(token)
-                        contentType(ContentType.Application.Json)
-                        val body = convertMapToHashMap(request.body)
-                        if (body is Map<*, *>) {
-                            @Suppress("UNCHECKED_CAST")
-                            val mapBody = body as Map<String, Any>
-                            setBody(JsonObject(mapBody.mapValues { anyToJsonElement(it.value) }))
-                        } else if (body is String) {
-                            setBody(json.parseToJsonElement(body))
+        // If no requests generated, try with all members including self to ensure key exists
+        if (roomKeyRequests.isEmpty()) {
+            val allMembersRequests = machine.shareRoomKey(roomId, allRoomMembers, encryptionSettings)
+            println("🔐 All members room key requests: ${allMembersRequests.size}")
+            // Use the all members requests
+            // Send allMembersRequests
+            for (request in allMembersRequests) {
+                when (request) {
+                    is Request.ToDevice -> {
+                        val response = client.put("$currentHomeserver/_matrix/client/v3/sendToDevice/${request.eventType}/${System.currentTimeMillis()}") {
+                            bearerAuth(token)
+                            contentType(ContentType.Application.Json)
+                            val body = convertMapToHashMap(request.body)
+                            if (body is Map<*, *>) {
+                                @Suppress("UNCHECKED_CAST")
+                                val mapBody = body as Map<String, Any>
+                                setBody(JsonObject(mapBody.mapValues { anyToJsonElement(it.value) }))
+                            } else if (body is String) {
+                                setBody(json.parseToJsonElement(body))
+                            }
+                        }
+                        if (response.status == HttpStatusCode.OK) {
+                            println("✅ Room key shared with all members successfully")
                         }
                     }
-                    if (response.status == HttpStatusCode.OK) {
-                        println("✅ Room key shared successfully")
+                    else -> {
+                        println("⚠️  Unhandled all members request type: ${request::class.simpleName}")
                     }
                 }
-                else -> {
-                    println("⚠️  Unhandled room key request type: ${request::class.simpleName}")
+            }
+        } else {
+            // Send room key requests
+            for (request in roomKeyRequests) {
+                when (request) {
+                    is Request.ToDevice -> {
+                        val response = client.put("$currentHomeserver/_matrix/client/v3/sendToDevice/${request.eventType}/${System.currentTimeMillis()}") {
+                            bearerAuth(token)
+                            contentType(ContentType.Application.Json)
+                            val body = convertMapToHashMap(request.body)
+                            if (body is Map<*, *>) {
+                                @Suppress("UNCHECKED_CAST")
+                                val mapBody = body as Map<String, Any>
+                                setBody(JsonObject(mapBody.mapValues { anyToJsonElement(it.value) }))
+                            } else if (body is String) {
+                                setBody(json.parseToJsonElement(body))
+                            }
+                        }
+                        if (response.status == HttpStatusCode.OK) {
+                            println("✅ Room key shared successfully")
+                        }
+                    }
+                    else -> {
+                        println("⚠️  Unhandled room key request type: ${request::class.simpleName}")
+                    }
                 }
             }
         }
@@ -317,7 +435,7 @@ suspend fun ensureRoomEncryption(roomId: String): Boolean {
                     }
                 }
                 is Request.KeysQuery -> {
-                    val response = client.post("$currentHomeserver/_matrix/client/v3/keys/query") {
+                    val keysQueryResponse = client.post("$currentHomeserver/_matrix/client/v3/keys/query") {
                         bearerAuth(token)
                         contentType(ContentType.Application.Json)
                         val convertedUsers = convertMapToHashMap(request.users)
@@ -333,8 +451,36 @@ suspend fun ensureRoomEncryption(roomId: String): Boolean {
                             setBody(JsonObject(mapOf("device_keys" to JsonObject(emptyMap()))))
                         }
                     }
-                    if (response.status == HttpStatusCode.OK) {
-                        println("✅ Keys query sent successfully")
+                    if (keysQueryResponse.status == HttpStatusCode.OK) {
+                        val keysResponseText = keysQueryResponse.body<String>()
+                        val keysJson = json.parseToJsonElement(keysResponseText)
+                        val deviceKeysJson = keysJson.jsonObject["device_keys"]?.jsonObject ?: JsonObject(emptyMap())
+                        val events = mutableListOf<String>()
+                        val changedUsersList = mutableListOf<String>()
+                        for ((user, devices) in deviceKeysJson) {
+                            changedUsersList.add(user)
+                            val devicesMap = devices.jsonObject
+                            for ((device, deviceInfo) in devicesMap) {
+                                val event = json.encodeToString(JsonObject(mapOf(
+                                    "type" to JsonPrimitive("m.device_key_update"),
+                                    "sender" to JsonPrimitive(user),
+                                    "content" to deviceInfo
+                                )))
+                                events.add(event)
+                            }
+                        }
+                        val deviceChanges = DeviceLists(changed = changedUsersList, left = emptyList())
+                        val syncChanges = machine.receiveSyncChanges(
+                            events = events.joinToString(",", "[", "]"),
+                            deviceChanges = deviceChanges,
+                            keyCounts = emptyMap(),
+                            unusedFallbackKeys = null,
+                            nextBatchToken = "",
+                            decryptionSettings = DecryptionSettings(senderDeviceTrustRequirement = TrustRequirement.UNTRUSTED)
+                        )
+                        println("✅ Processed remaining keys query response: ${syncChanges.roomKeyInfos.size} room keys, ${changedUsersList.size} users updated")
+                    } else {
+                        println("❌ Failed to send remaining keys query: ${keysQueryResponse.status}")
                     }
                 }
                 else -> {
