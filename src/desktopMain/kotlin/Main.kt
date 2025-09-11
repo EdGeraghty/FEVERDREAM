@@ -13,7 +13,7 @@ import androidx.compose.ui.window.Window
 import kotlin.system.exitProcess
 import io.ktor.client.*
 import io.ktor.client.call.*
-import io.ktor.client.engine.apache.*
+import io.ktor.client.engine.cio.*
 import io.ktor.client.plugins.contentnegotiation.*
 import io.ktor.client.request.*
 import io.ktor.http.*
@@ -79,28 +79,9 @@ fun anyToJsonElement(value: Any?): JsonElement {
     }
 }
 
-val client = HttpClient(Apache) {
+val client = HttpClient(CIO) {
     install(ContentNegotiation) {
         json(json)
-    }
-    engine {
-        // Configure Apache HttpClient for better TLS support
-        customizeClient {
-            // Allow all SSL protocols including older ones
-            val sslContext = SSLContext.getInstance("TLS")
-            sslContext.init(null, arrayOf(
-                object : X509TrustManager {
-                    override fun checkClientTrusted(chain: Array<out java.security.cert.X509Certificate>?, authType: String?) {}
-                    override fun checkServerTrusted(chain: Array<out java.security.cert.X509Certificate>?, authType: String?) {}
-                    override fun getAcceptedIssuers(): Array<java.security.cert.X509Certificate> = arrayOf()
-                }
-            ), SecureRandom())
-            setSSLContext(sslContext)
-            setSSLHostnameVerifier { _, _ -> true }
-        }
-        // Configure connection settings
-        connectTimeout = 10000
-        socketTimeout = 10000
     }
 }
 
@@ -1171,7 +1152,7 @@ suspend fun sendMessage(roomId: String, message: String): Boolean {
                                     }
                                 }
                                 if (keysQueryResponse.status != HttpStatusCode.OK) {
-                                    println("❌ Failed to query keys: ${keysQueryResponse.status}")
+                                    println("❌ Failed to send keys query: ${keysQueryResponse.status}")
                                 }
                             }
                             else -> {
@@ -1759,576 +1740,63 @@ suspend fun startPeriodicSync() {
 }
 
 fun main() = application {
-    Window(onCloseRequest = { exitProcess(0) }, title = "FEVERDREAM") {
-        App()
+    Window(onCloseRequest = { exitProcess(0) }, title = "FEVERDREAM - Vodozemac Test") {
+        TestVodozemacApp()
     }
 }
 
 @Composable
 @Preview
-fun App() {
+fun TestVodozemacApp() {
     val scope = rememberCoroutineScope()
-    var loginResponse by remember { mutableStateOf<LoginResponse?>(null) }
-    var homeserver by remember { mutableStateOf("https://matrix.org") }
-    var error by remember { mutableStateOf<String?>(null) }
-    var isLoading by remember { mutableStateOf(true) }
-    var isRestoringSession by remember { mutableStateOf(true) }
-    var sessionRefreshTrigger by remember { mutableStateOf(0) }
+    var testResult by remember { mutableStateOf<String?>(null) }
+    var isTesting by remember { mutableStateOf(false) }
 
-    // Function to restore session
-    val restoreSession = {
+    // Run test on launch
+    LaunchedEffect(Unit) {
+        isTesting = true
         scope.launch {
             try {
-                val sessionData = loadSession()
-                if (sessionData != null && validateSession(sessionData)) {
-                    // Restore session data
-                    currentAccessToken = sessionData.accessToken
-                    currentDeviceId = sessionData.deviceId
-                    currentUserId = sessionData.userId
-                    currentHomeserver = sessionData.homeserver
-                    currentSyncToken = sessionData.syncToken
-
-                    // Initialize encryption with restored session
-                    initializeEncryption(sessionData.userId, sessionData.deviceId)
-
-                    // Create login response for UI
-                    loginResponse = LoginResponse(
-                        user_id = sessionData.userId,
-                        access_token = sessionData.accessToken,
-                        device_id = sessionData.deviceId
-                    )
-
-                    println("✅ Session restored successfully")
-                } else {
-                    if (sessionData != null) {
-                        println("❌ Stored session is invalid, clearing...")
-                        clearSession()
-                    }
-                }
+                testVodozemac()
+                testResult = "✅ Vodozemac uniffi bindings loaded successfully!"
             } catch (e: Exception) {
-                println("❌ Failed to restore session: ${e.message}")
-                clearSession()
+                testResult = "❌ Error: ${e.message}"
+                e.printStackTrace()
             } finally {
-                isRestoringSession = false
-                isLoading = false
-
-                // Start periodic sync for to-device events
-                if (currentAccessToken != null && olmMachine != null) {
-                    scope.launch {
-                        startPeriodicSync()
-                    }
-                }
+                isTesting = false
             }
         }
-    }
-
-    // Check for existing session on app launch
-    LaunchedEffect(Unit, sessionRefreshTrigger) {
-        restoreSession()
     }
 
     MaterialTheme {
-        when {
-            isRestoringSession -> {
-                // Show loading screen while checking for existing session
-                Column(
-                    modifier = Modifier.fillMaxSize(),
-                    verticalArrangement = Arrangement.Center,
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    CircularProgressIndicator()
-                    Spacer(modifier = Modifier.height(16.dp))
-                    Text("Restoring session...")
-                }
-            }
-            loginResponse == null -> {
-                LoginScreen(
-                    onLogin = { username, password, hs ->
-                        // Allow empty homeserver if username contains domain
-                        val homeserverRequired = !username.contains(":")
-                        if (username.isBlank() || password.isBlank() || (homeserverRequired && hs.isBlank())) {
-                            error = if (username.isBlank()) "Please enter a username"
-                                   else if (password.isBlank()) "Please enter a password"
-                                   else "Please enter a homeserver or use username@domain format"
-                            return@LoginScreen
-                        }
-                        isLoading = true
-                        error = null
-                        homeserver = hs
-                        scope.launch {
-                            try {
-                                val response = login(username, password, homeserver)
-                                loginResponse = response
-                                // Start periodic sync for to-device events after successful login
-                                if (currentAccessToken != null && olmMachine != null) {
-                                    scope.launch {
-                                        startPeriodicSync()
-                                    }
-                                }
-                                // Trigger session refresh to update UI
-                                sessionRefreshTrigger++
-                            } catch (e: Exception) {
-                                error = e.message ?: "Login failed. Please try again."
-                            } finally {
-                                isLoading = false
-                            }
-                        }
-                    },
-                    error = error,
-                    isLoading = isLoading
-                )
-            }
-            else -> {
-                ChatScreen(
-                    loginResponse = loginResponse!!,
-                    onLogout = {
-                        scope.launch {
-                            clearSession()
-                            // Reset global state
-                            currentAccessToken = null
-                            currentDeviceId = null
-                            currentUserId = null
-                            currentHomeserver = "https://matrix.org"
-                            currentSyncToken = ""
-                            olmMachine = null
-                            // Reset UI state
-                            loginResponse = null
-                            error = null
-                            isLoading = false
-                            // Trigger session refresh to update UI
-                            sessionRefreshTrigger++
-                        }
-                    }
-                )
-            }
-        }
-    }
-}
-
-@Composable
-fun LoginScreen(onLogin: (String, String, String) -> Unit, error: String?, isLoading: Boolean) {
-    var username by remember { mutableStateOf("") }
-    var password by remember { mutableStateOf("") }
-    var homeserver by remember { mutableStateOf("") }
-
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(16.dp),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Text("FEVERDREAM", style = MaterialTheme.typography.h4)
-        Text("Matrix Client with Encryption Support", style = MaterialTheme.typography.subtitle1)
-        Spacer(modifier = Modifier.height(32.dp))
-        TextField(
-            value = username,
-            onValueChange = { username = it },
-            label = { Text("Username") },
-            modifier = Modifier.fillMaxWidth(0.5f),
-            enabled = !isLoading
-        )
-        Spacer(modifier = Modifier.height(8.dp))
-        TextField(
-            value = password,
-            onValueChange = { password = it },
-            label = { Text("Password") },
-            visualTransformation = PasswordVisualTransformation(),
-            modifier = Modifier.fillMaxWidth(0.5f),
-            enabled = !isLoading
-        )
-        Spacer(modifier = Modifier.height(8.dp))
-        TextField(
-            value = homeserver,
-            onValueChange = { homeserver = it },
-            label = { Text("Homeserver (leave empty if using user@domain format)") },
-            modifier = Modifier.fillMaxWidth(0.5f),
-            enabled = !isLoading
-        )
-        Spacer(modifier = Modifier.height(16.dp))
-        if (error != null) {
-            Text(error, color = MaterialTheme.colors.error)
-            Spacer(modifier = Modifier.height(8.dp))
-        }
-        Button(
-            onClick = { onLogin(username, password, homeserver) },
-            enabled = !isLoading,
-            modifier = Modifier.fillMaxWidth(0.5f)
+        Column(
+            modifier = Modifier.fillMaxSize(),
+            verticalArrangement = Arrangement.Center,
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            if (isLoading) {
-                CircularProgressIndicator(modifier = Modifier.size(20.dp))
-            } else {
-                Text("Login")
-            }
-        }
-    }
-}
+            Text("FEVERDREAM", style = MaterialTheme.typography.h4)
+            Text("Testing Vodozemac Uniffi Bindings", style = MaterialTheme.typography.subtitle1)
+            Spacer(modifier = Modifier.height(32.dp))
 
-@Composable
-fun ChatScreen(loginResponse: LoginResponse, onLogout: () -> Unit) {
-    var rooms by remember { mutableStateOf(listOf<String>()) }
-    var invites by remember { mutableStateOf(listOf<RoomInvite>()) }
-    var isLoading by remember { mutableStateOf(true) }
-    var openChatWindows by remember { mutableStateOf(setOf<String>()) }
-    var refreshTrigger by remember { mutableStateOf(0) }
-    val scope = rememberCoroutineScope()
-
-    // Function to refresh rooms and invites
-    val refreshData = {
-        scope.launch {
-            try {
-                val newRooms = getJoinedRooms()
-                val newInvites = getRoomInvites()
-                rooms = newRooms
-                invites = newInvites
-            } catch (e: Exception) {
-                println("❌ Failed to refresh rooms and invites: ${e.message}")
-            }
-        }
-    }
-
-    LaunchedEffect(loginResponse, refreshTrigger) {
-        isLoading = true
-        refreshData()
-        isLoading = false
-    }
-
-    // Periodic refresh every 5 seconds for better responsiveness
-    LaunchedEffect(Unit) {
-        while (true) {
-            kotlinx.coroutines.delay(5000)
-            refreshData()
-        }
-    }
-
-    Column(modifier = Modifier.padding(16.dp)) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column {
-                Text("FEVERDREAM", style = MaterialTheme.typography.h5)
-                Text("Logged in as: ${loginResponse.user_id}", style = MaterialTheme.typography.caption)
-            }
-            Button(
-                onClick = onLogout,
-                colors = ButtonDefaults.buttonColors(backgroundColor = MaterialTheme.colors.error)
-            ) {
-                Text("Logout")
-            }
-        }
-        Spacer(modifier = Modifier.height(16.dp))
-
-        if (isLoading) {
-            CircularProgressIndicator()
-            Text("Loading rooms and invites...")
-        } else {
-            // Show pending invites
-            if (invites.isNotEmpty()) {
-                Text("Pending Invites:", style = MaterialTheme.typography.h6)
-                Spacer(modifier = Modifier.height(8.dp))
-
-                invites.forEach { invite ->
-                    Card(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-                        Column(modifier = Modifier.padding(16.dp)) {
-                            val roomName = invite.state.events.firstOrNull()?.let { event ->
-                                if (event.type == "m.room.name") {
-                                    try {
-                                        json.decodeFromJsonElement<Map<String, String>>(event.content)["name"] ?: invite.room_id
-                                    } catch (e: Exception) {
-                                        invite.room_id
-                                    }
-                                } else invite.room_id
-                            } ?: invite.room_id
-
-                            Text("Room: $roomName", style = MaterialTheme.typography.body1)
-                            Text("Invited by: ${invite.sender}", style = MaterialTheme.typography.body2)
-
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Row {
-                                Button(
-                                    onClick = {
-                                        scope.launch {
-                                            if (acceptRoomInvite(invite.room_id)) {
-                                                // Trigger refresh instead of directly updating state
-                                                refreshTrigger++
-                                            }
-                                        }
-                                    },
-                                    modifier = Modifier.weight(1f).padding(end = 4.dp)
-                                ) {
-                                    Text("Accept")
-                                }
-
-                                Button(
-                                    onClick = {
-                                        scope.launch {
-                                            if (rejectRoomInvite(invite.room_id)) {
-                                                // Trigger refresh instead of directly updating state
-                                                refreshTrigger++
-                                            }
-                                        }
-                                    },
-                                    modifier = Modifier.weight(1f).padding(start = 4.dp),
-                                    colors = ButtonDefaults.buttonColors(backgroundColor = MaterialTheme.colors.error)
-                                ) {
-                                    Text("Reject")
-                                }
-                            }
-                        }
-                    }
-                }
-
+            if (isTesting) {
+                CircularProgressIndicator()
                 Spacer(modifier = Modifier.height(16.dp))
-            }
-
-            // Show joined rooms
-            Text("Joined Rooms:", style = MaterialTheme.typography.h6)
-            Spacer(modifier = Modifier.height(8.dp))
-
-            if (rooms.isEmpty()) {
-                Text("No joined rooms yet.")
+                Text("Testing native library loading...")
             } else {
-                rooms.forEach { roomId ->
-                    Card(modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
-                        Row(
-                            modifier = Modifier.padding(16.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(roomId, modifier = Modifier.weight(1f))
-                            Button(onClick = {
-                                if (roomId !in openChatWindows) {
-                                    openChatWindows = openChatWindows + roomId
-                                }
-                            }) {
-                                Text("Open")
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // Render open chat windows
-    openChatWindows.forEach { roomId ->
-        key(roomId) {
-            Window(
-                onCloseRequest = {
-                    openChatWindows = openChatWindows - roomId
-                },
-                title = "Chat - $roomId"
-            ) {
-                ChatWindow(
-                    roomId = roomId,
-                    onClose = {
-                        openChatWindows = openChatWindows - roomId
-                    }
-                )
-            }
-        }
-    }
-}
-
-@Composable
-fun ChatWindow(roomId: String, onClose: () -> Unit) {
-    var messages by remember { mutableStateOf(listOf<Event>()) }
-    var newMessage by remember { mutableStateOf("") }
-    var isLoading by remember { mutableStateOf(true) }
-    var isEncrypted by remember { mutableStateOf(false) }
-    var refreshTrigger by remember { mutableStateOf(0) }
-    val scope = rememberCoroutineScope()
-    val listState = rememberLazyListState()
-
-    // Function to refresh messages
-    val refreshMessages = {
-        scope.launch {
-            try {
-                // More aggressive sync for encrypted rooms
-                if (isEncrypted) {
-                    println("🔐 Encrypted room detected, performing multiple syncs...")
-                    // Do multiple syncs to ensure we get all keys
-                    repeat(2) { syncAttempt ->
-                        val syncResult = syncAndProcessToDevice(30000UL)
-                        if (!syncResult) {
-                            println("⚠️  Sync attempt ${syncAttempt + 1} failed")
-                        }
-                        kotlinx.coroutines.delay(1000) // Small delay between syncs
-                    }
-                } else {
-                    // Single sync for unencrypted rooms
-                    syncAndProcessToDevice(30000UL)
-                }
-
-                val newMessages = getRoomMessages(roomId)
-                val newIsEncrypted = isRoomEncrypted(roomId)
-
-                // If room became encrypted or we detected encryption, ensure setup
-                if (newIsEncrypted && !isEncrypted) {
-                    println("🔐 Room became encrypted, setting up encryption...")
-                    ensureRoomEncryption(roomId)
-                    // Additional sync after setup
-                    syncAndProcessToDevice(30000UL)
-                    val updatedMessages = getRoomMessages(roomId)
-                    messages = updatedMessages
-                } else {
-                    messages = newMessages
-                }
-                isEncrypted = newIsEncrypted
-            } catch (e: Exception) {
-                println("❌ Failed to refresh messages: ${e.message}")
-            }
-        }
-    }
-
-    LaunchedEffect(roomId, refreshTrigger) {
-        isLoading = true
-        refreshMessages()
-        isLoading = false
-    }
-
-    // Periodic refresh every 5 seconds
-    LaunchedEffect(Unit) {
-        while (true) {
-            kotlinx.coroutines.delay(5000)
-            refreshMessages()
-        }
-    }
-
-    MaterialTheme {
-        Column(modifier = Modifier.fillMaxSize()) {
-            // Header
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(16.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text("Chat: $roomId", style = MaterialTheme.typography.h6)
-                    if (isEncrypted) {
-                        Text("🔐 Encrypted Room (Matrix SDK Crypto with vodozemac)", style = MaterialTheme.typography.caption, color = MaterialTheme.colors.primary)
-                    }
-                }
-                Button(onClick = onClose) {
-                    Text("Close")
+                testResult?.let { result ->
+                    Text(
+                        text = result,
+                        style = MaterialTheme.typography.body1,
+                        color = if (result.startsWith("✅")) MaterialTheme.colors.primary else MaterialTheme.colors.error
+                    )
                 }
             }
 
-            // Messages area
-            Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-                if (isLoading) {
-                    CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
-                } else if (messages.isEmpty()) {
-                    Text("No messages yet", modifier = Modifier.align(Alignment.Center))
-                } else {
-                    LazyColumn(
-                        state = listState,
-                        modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
-                        reverseLayout = false
-                    ) {
-                        items(messages) { message ->
-                            MessageItem(message)
-                        }
-                    }
-
-                    // Auto-scroll to bottom when new messages arrive
-                    LaunchedEffect(messages.size) {
-                        listState.animateScrollToItem(messages.size - 1)
-                    }
-                }
-            }
-
-            // Message input area
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(16.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                TextField(
-                    value = newMessage,
-                    onValueChange = { newMessage = it },
-                    label = { Text("Type a message...") },
-                    modifier = Modifier.weight(1f),
-                    singleLine = true
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Button(
-                    onClick = {
-                        if (newMessage.isNotBlank()) {
-                            val messageToSend = newMessage
-                            newMessage = ""
-                            scope.launch {
-                                if (sendMessage(roomId, messageToSend)) {
-                                    // Trigger refresh instead of directly updating messages
-                                    refreshTrigger++
-                                }
-                            }
-                        }
-                    },
-                    enabled = newMessage.isNotBlank()
-                ) {
-                    Text("Send")
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun MessageItem(message: Event) {
-    val displayText = when (message.type) {
-        "m.room.message" -> {
-            try {
-                val content = json.decodeFromJsonElement<MessageContent>(message.content)
-                when (content.msgtype) {
-                    "m.text" -> content.body ?: "[No message content]"
-                    "m.bad.encrypted" -> content.body ?: "[Unable to decrypt]"
-                    else -> "[${content.msgtype}] ${content.body ?: "[No content]"}"
-                }
-            } catch (e: Exception) {
-                "[Unable to parse message]"
-            }
-        }
-        else -> "[${message.type}]"
-    }
-
-    val isOwnMessage = message.sender == currentUserId
-    val backgroundColor = if (isOwnMessage) MaterialTheme.colors.primary else MaterialTheme.colors.surface
-    val textColor = if (isOwnMessage) MaterialTheme.colors.onPrimary else MaterialTheme.colors.onSurface
-
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 4.dp),
-        horizontalAlignment = if (isOwnMessage) Alignment.End else Alignment.Start
-    ) {
-        Card(
-            modifier = Modifier.widthIn(max = 300.dp),
-            backgroundColor = backgroundColor
-        ) {
-            Column(modifier = Modifier.padding(12.dp)) {
-                Text(
-                    text = message.sender,
-                    style = MaterialTheme.typography.caption,
-                    color = textColor.copy(alpha = 0.7f)
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = displayText,
-                    style = MaterialTheme.typography.body1,
-                    color = textColor
-                )
-                Spacer(modifier = Modifier.height(2.dp))
-                Text(
-                    text = java.time.Instant.ofEpochMilli(message.origin_server_ts)
-                        .toString().substring(11, 19),
-                    style = MaterialTheme.typography.caption,
-                    color = textColor.copy(alpha = 0.5f)
-                )
-            }
+            Spacer(modifier = Modifier.height(32.dp))
+            Text(
+                text = "If successful, the vodozemac uniffi bindings are working correctly on macOS!",
+                style = MaterialTheme.typography.caption
+            )
         }
     }
 }
