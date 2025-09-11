@@ -843,6 +843,16 @@ suspend fun getRoomMessages(roomId: String): List<Event> {
                 val decryptedMessages = messages.map { event ->
                     if (event.type == "m.room.encrypted") {
                         try {
+                            // Always sync before attempting decryption to get latest keys
+                            println("🔄 Syncing before decryption...")
+                            val syncResult = syncAndProcessToDevice(30000UL)
+                            if (!syncResult) {
+                                println("⚠️  Sync failed before decryption")
+                            }
+
+                            // Add a small delay to allow key processing
+                            kotlinx.coroutines.delay(1000)
+
                             val eventJson = json.encodeToString(event)
                             val decryptionSettings = DecryptionSettings(senderDeviceTrustRequirement = TrustRequirement.UNTRUSTED)
                             val decrypted = machine.decryptRoomEvent(
@@ -878,12 +888,99 @@ suspend fun getRoomMessages(roomId: String): List<Event> {
                                 content = json.parseToJsonElement(json.encodeToString(finalContent))
                             )
                         } catch (e: Exception) {
-                            // If decryption fails, create a message with error
                             println("❌ Decryption failed: ${e.message}")
-                            event.copy(
-                                type = "m.room.message",
-                                content = json.parseToJsonElement("""{"msgtype": "m.bad.encrypted", "body": "** Unable to decrypt: ${e.message} **"}""")
-                            )
+
+                            // If decryption fails due to missing keys, try to request them
+                            if (e.message?.contains("Can't find the room key") == true) {
+                                println("🔑 Room key missing, attempting to request keys...")
+                                try {
+                                    // Request missing keys from other devices
+                                    val keyRequests = machine.outgoingRequests()
+                                    for (request in keyRequests) {
+                                        when (request) {
+                                            is Request.KeysQuery -> {
+                                                println("📤 Sending keys query to request missing keys")
+                                                val keysQueryResponse = client.post("$currentHomeserver/_matrix/client/v3/keys/query") {
+                                                    bearerAuth(token)
+                                                    contentType(ContentType.Application.Json)
+                                                    val convertedUsers = convertMapToHashMap(request.users)
+                                                    if (convertedUsers is Map<*, *>) {
+                                                        @Suppress("UNCHECKED_CAST")
+                                                        val usersMap = convertedUsers as Map<String, Any>
+                                                        val deviceKeys = usersMap.mapValues { JsonArray(emptyList<JsonElement>()) }
+                                                        setBody(JsonObject(mapOf("device_keys" to JsonObject(deviceKeys))))
+                                                    } else {
+                                                        setBody(JsonObject(mapOf("device_keys" to JsonObject(emptyMap()))))
+                                                    }
+                                                }
+                                                if (keysQueryResponse.status == HttpStatusCode.OK) {
+                                                    println("✅ Keys query sent for missing keys")
+                                                }
+                                            }
+                                            else -> {
+                                                // Handle other requests if needed
+                                            }
+                                        }
+                                    }
+
+                                    // Try one more sync after requesting keys
+                                    println("🔄 Syncing again after key request...")
+                                    syncAndProcessToDevice(30000UL)
+
+                                    // Add delay before retrying decryption
+                                    kotlinx.coroutines.delay(2000)
+
+                                    // Try decryption again
+                                    try {
+                                        val eventJson = json.encodeToString(event)
+                                        val decryptionSettings = DecryptionSettings(senderDeviceTrustRequirement = TrustRequirement.UNTRUSTED)
+                                        val decrypted = machine.decryptRoomEvent(
+                                            roomId = roomId,
+                                            event = eventJson,
+                                            decryptionSettings = decryptionSettings,
+                                            handleVerificationEvents = false,
+                                            strictShields = false
+                                        )
+
+                                        val decryptedContent = json.parseToJsonElement(decrypted.clearEvent)
+                                        val messageContent = try {
+                                            json.decodeFromJsonElement<MessageContent>(decryptedContent)
+                                        } catch (e: Exception) {
+                                            MessageContent("m.text", decrypted.clearEvent.trim('"'))
+                                        }
+
+                                        val finalContent = if (messageContent.body.isNullOrBlank()) {
+                                            messageContent.copy(body = decrypted.clearEvent.trim('"'))
+                                        } else {
+                                            messageContent
+                                        }
+
+                                        event.copy(
+                                            type = "m.room.message",
+                                            content = json.parseToJsonElement(json.encodeToString(finalContent))
+                                        )
+                                    } catch (retryException: Exception) {
+                                        println("❌ Retry decryption also failed: ${retryException.message}")
+                                        // Create error message with more details
+                                        event.copy(
+                                            type = "m.room.message",
+                                            content = json.parseToJsonElement("""{"msgtype": "m.bad.encrypted", "body": "** Unable to decrypt: Key not available. Please wait for key sharing or try again later. **"}""")
+                                        )
+                                    }
+                                } catch (keyRequestException: Exception) {
+                                    println("❌ Key request failed: ${keyRequestException.message}")
+                                    event.copy(
+                                        type = "m.room.message",
+                                        content = json.parseToJsonElement("""{"msgtype": "m.bad.encrypted", "body": "** Unable to decrypt: ${e.message} **"}""")
+                                    )
+                                }
+                            } else {
+                                // Other decryption error
+                                event.copy(
+                                    type = "m.room.message",
+                                    content = json.parseToJsonElement("""{"msgtype": "m.bad.encrypted", "body": "** Unable to decrypt: ${e.message} **"}""")
+                                )
+                            }
                         }
                     } else {
                         event
@@ -983,14 +1080,14 @@ suspend fun sendMessage(roomId: String, message: String): Boolean {
 
                 // Step 2: Sync multiple times to get the latest keys for tracked users
                 println("🔄 Syncing multiple times to get device keys...")
-                repeat(3) { syncAttempt ->
-                    println("🔄 Device key sync attempt ${syncAttempt + 1}/3...")
+                repeat(5) { syncAttempt -> // Increased from 3 to 5
+                    println("🔄 Device key sync attempt ${syncAttempt + 1}/5...")
                     val keySyncResult = syncAndProcessToDevice(30000UL)
                     if (!keySyncResult) {
                         println("⚠️  Device key sync ${syncAttempt + 1} failed, but continuing...")
                     }
-                    // Small delay between syncs
-                    kotlinx.coroutines.delay(1000)
+                    // Longer delay between syncs to allow key sharing
+                    kotlinx.coroutines.delay(2000) // Increased from 1000 to 2000
                 }
 
                 // Step 3: Check for missing sessions and establish them
@@ -1004,9 +1101,10 @@ suspend fun sendMessage(roomId: String, message: String): Boolean {
                     try {
                         val userDevices = machine.getUserDevices(userId, 30000U)
                         println("🔍 User $userId has ${userDevices.size} devices")
-                        // Print device IDs if available
                         if (userDevices.isNotEmpty()) {
                             println("🔍 Device IDs: ${userDevices.joinToString(", ")}")
+                        } else {
+                            println("⚠️  User $userId has no devices available!")
                         }
                     } catch (e: Exception) {
                         println("🔍 Could not get devices for $userId: ${e.message}")
@@ -1015,8 +1113,7 @@ suspend fun sendMessage(roomId: String, message: String): Boolean {
 
                 if (missingSessionsCount > 0) {
                     println("🔑 Establishing Olm sessions with room members...")
-
-                    // Send any outgoing requests to establish sessions
+                    println("🔑 Missing sessions count: $missingSessionsCount")
                     val sessionRequests = machine.outgoingRequests()
                     for (request in sessionRequests) {
                         when (request) {
@@ -1486,22 +1583,129 @@ suspend fun ensureRoomEncryption(roomId: String): Boolean {
     }
 }
 
-suspend fun startPeriodicSync() {
-    while (true) {
-        try {
-            // Sync every 10 seconds to keep receiving to-device events more frequently
-            kotlinx.coroutines.delay(10000)
-            if (currentAccessToken != null && olmMachine != null) {
-                val syncResult = syncAndProcessToDevice(30000UL)
-                if (syncResult) {
-                    println("🔄 Periodic sync completed successfully")
-                } else {
-                    println("⚠️  Periodic sync failed")
+suspend fun requestMissingKeys(roomId: String): Boolean {
+    val token = currentAccessToken ?: return false
+    val machine = olmMachine ?: return false
+
+    try {
+        println("🔑 Requesting missing keys for room: $roomId")
+
+        // Get room members to query their keys
+        val roomMembers = getRoomMembers(roomId).filter { it != currentUserId }
+
+        if (roomMembers.isEmpty()) {
+            println("⚠️  No other room members found")
+            return false
+        }
+
+        // Mark users for tracking to ensure we get their device keys
+        machine.updateTrackedUsers(roomMembers)
+        println("✅ Marked ${roomMembers.size} users for tracking")
+
+        // Debug: Check devices for each user
+        for (userId in roomMembers) {
+            try {
+                val userDevices = machine.getUserDevices(userId, 30000U)
+                println("🔍 User $userId has ${userDevices.size} devices: ${userDevices.joinToString(", ")}")
+            } catch (e: Exception) {
+                println("🔍 Could not get devices for $userId: ${e.message}")
+            }
+        }
+
+        // Send keys query to get device keys for all room members
+        val keysQueryRequest = machine.outgoingRequests()
+        for (request in keysQueryRequest) {
+            when (request) {
+                is Request.KeysQuery -> {
+                    println("📤 Sending keys query for room members")
+                    val keysQueryResponse = client.post("$currentHomeserver/_matrix/client/v3/keys/query") {
+                        bearerAuth(token)
+                        contentType(ContentType.Application.Json)
+                        val convertedUsers = convertMapToHashMap(request.users)
+                        if (convertedUsers is Map<*, *>) {
+                            @Suppress("UNCHECKED_CAST")
+                            val usersMap = convertedUsers as Map<String, Any>
+                            val deviceKeys = usersMap.mapValues { JsonArray(emptyList<JsonElement>()) }
+                            setBody(JsonObject(mapOf("device_keys" to JsonObject(deviceKeys))))
+                        } else {
+                            setBody(JsonObject(mapOf("device_keys" to JsonObject(emptyMap()))))
+                        }
+                    }
+                    if (keysQueryResponse.status == HttpStatusCode.OK) {
+                        println("✅ Keys query sent successfully")
+                    } else {
+                        println("❌ Failed to send keys query: ${keysQueryResponse.status}")
+                    }
+                }
+                else -> {
+                    // Handle other requests
                 }
             }
-        } catch (e: Exception) {
-            println("❌ Periodic sync error: ${e.message}")
         }
+
+        // Sync multiple times to get the device keys and any room keys
+        println("🔄 Syncing multiple times to get keys...")
+        repeat(5) { syncAttempt -> // Increased from 3 to 5
+            println("🔄 Key sync attempt ${syncAttempt + 1}/5...")
+            val syncResult = syncAndProcessToDevice(30000UL)
+            if (!syncResult) {
+                println("⚠️  Key sync ${syncAttempt + 1} failed")
+            }
+            kotlinx.coroutines.delay(2000) // Increased delay
+        }
+
+        // Try to share room key again to ensure all members have it
+        val encryptionSettings = EncryptionSettings(
+            algorithm = EventEncryptionAlgorithm.MEGOLM_V1_AES_SHA2,
+            rotationPeriod = 604800000UL,
+            rotationPeriodMsgs = 100UL,
+            historyVisibility = HistoryVisibility.SHARED,
+            onlyAllowTrustedDevices = false,
+            errorOnVerifiedUserProblem = false
+        )
+
+        val roomKeyRequests = machine.shareRoomKey(roomId, roomMembers, encryptionSettings)
+        println("🔐 Additional room key requests: ${roomKeyRequests.size}")
+
+        // Send any new room key requests
+        for (request in roomKeyRequests) {
+            when (request) {
+                is Request.ToDevice -> {
+                    val response = client.put("$currentHomeserver/_matrix/client/v3/sendToDevice/${request.eventType}/${System.currentTimeMillis()}") {
+                        bearerAuth(token)
+                        contentType(ContentType.Application.Json)
+                        val body = convertMapToHashMap(request.body)
+                        if (body is Map<*, *>) {
+                            @Suppress("UNCHECKED_CAST")
+                            val mapBody = body as Map<String, Any>
+                            setBody(JsonObject(mapBody.mapValues { anyToJsonElement(it.value) }))
+                        } else if (body is String) {
+                            setBody(json.parseToJsonElement(body))
+                        }
+                    }
+                    if (response.status == HttpStatusCode.OK) {
+                        println("✅ Additional room key shared")
+                    }
+                }
+                else -> {
+                    println("⚠️  Unhandled room key request type: ${request::class.simpleName}")
+                }
+            }
+        }
+
+        // Final sync to process any responses
+        val finalSyncResult = syncAndProcessToDevice(30000UL)
+        if (finalSyncResult) {
+            println("✅ Key request process completed successfully")
+            return true
+        } else {
+            println("⚠️  Final sync after key request failed")
+            return false
+        }
+
+    } catch (e: Exception) {
+        println("❌ Failed to request missing keys: ${e.message}")
+        return false
     }
 }
 
@@ -1535,6 +1739,25 @@ suspend fun rejectRoomInvite(roomId: String): Boolean {
     return false
 }
 
+suspend fun startPeriodicSync() {
+    while (true) {
+        try {
+            // Sync every 5 seconds for better responsiveness to key sharing
+            kotlinx.coroutines.delay(5000)
+            if (currentAccessToken != null && olmMachine != null) {
+                val syncResult = syncAndProcessToDevice(30000UL)
+                if (syncResult) {
+                    println("🔄 Periodic sync completed successfully")
+                } else {
+                    println("⚠️  Periodic sync failed")
+                }
+            }
+        } catch (e: Exception) {
+            println("❌ Periodic sync error: ${e.message}")
+        }
+    }
+}
+
 fun main() = application {
     Window(onCloseRequest = { exitProcess(0) }, title = "FEVERDREAM") {
         App()
@@ -1550,9 +1773,10 @@ fun App() {
     var error by remember { mutableStateOf<String?>(null) }
     var isLoading by remember { mutableStateOf(true) }
     var isRestoringSession by remember { mutableStateOf(true) }
+    var sessionRefreshTrigger by remember { mutableStateOf(0) }
 
-    // Check for existing session on app launch
-    LaunchedEffect(Unit) {
+    // Function to restore session
+    val restoreSession = {
         scope.launch {
             try {
                 val sessionData = loadSession()
@@ -1598,6 +1822,11 @@ fun App() {
         }
     }
 
+    // Check for existing session on app launch
+    LaunchedEffect(Unit, sessionRefreshTrigger) {
+        restoreSession()
+    }
+
     MaterialTheme {
         when {
             isRestoringSession -> {
@@ -1636,6 +1865,8 @@ fun App() {
                                         startPeriodicSync()
                                     }
                                 }
+                                // Trigger session refresh to update UI
+                                sessionRefreshTrigger++
                             } catch (e: Exception) {
                                 error = e.message ?: "Login failed. Please try again."
                             } finally {
@@ -1664,6 +1895,8 @@ fun App() {
                             loginResponse = null
                             error = null
                             isLoading = false
+                            // Trigger session refresh to update UI
+                            sessionRefreshTrigger++
                         }
                     }
                 )
@@ -1737,14 +1970,34 @@ fun ChatScreen(loginResponse: LoginResponse, onLogout: () -> Unit) {
     var invites by remember { mutableStateOf(listOf<RoomInvite>()) }
     var isLoading by remember { mutableStateOf(true) }
     var openChatWindows by remember { mutableStateOf(setOf<String>()) }
+    var refreshTrigger by remember { mutableStateOf(0) }
     val scope = rememberCoroutineScope()
 
-    LaunchedEffect(loginResponse) {
-        isLoading = true
+    // Function to refresh rooms and invites
+    val refreshData = {
         scope.launch {
-            rooms = getJoinedRooms()
-            invites = getRoomInvites()
-            isLoading = false
+            try {
+                val newRooms = getJoinedRooms()
+                val newInvites = getRoomInvites()
+                rooms = newRooms
+                invites = newInvites
+            } catch (e: Exception) {
+                println("❌ Failed to refresh rooms and invites: ${e.message}")
+            }
+        }
+    }
+
+    LaunchedEffect(loginResponse, refreshTrigger) {
+        isLoading = true
+        refreshData()
+        isLoading = false
+    }
+
+    // Periodic refresh every 5 seconds for better responsiveness
+    LaunchedEffect(Unit) {
+        while (true) {
+            kotlinx.coroutines.delay(5000)
+            refreshData()
         }
     }
 
@@ -1798,9 +2051,8 @@ fun ChatScreen(loginResponse: LoginResponse, onLogout: () -> Unit) {
                                     onClick = {
                                         scope.launch {
                                             if (acceptRoomInvite(invite.room_id)) {
-                                                // Refresh data after accepting
-                                                rooms = getJoinedRooms()
-                                                invites = getRoomInvites()
+                                                // Trigger refresh instead of directly updating state
+                                                refreshTrigger++
                                             }
                                         }
                                     },
@@ -1813,8 +2065,8 @@ fun ChatScreen(loginResponse: LoginResponse, onLogout: () -> Unit) {
                                     onClick = {
                                         scope.launch {
                                             if (rejectRoomInvite(invite.room_id)) {
-                                                // Refresh invites after rejecting
-                                                invites = getRoomInvites()
+                                                // Trigger refresh instead of directly updating state
+                                                refreshTrigger++
                                             }
                                         }
                                     },
@@ -1885,26 +2137,62 @@ fun ChatWindow(roomId: String, onClose: () -> Unit) {
     var newMessage by remember { mutableStateOf("") }
     var isLoading by remember { mutableStateOf(true) }
     var isEncrypted by remember { mutableStateOf(false) }
+    var refreshTrigger by remember { mutableStateOf(0) }
     val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
 
-    LaunchedEffect(roomId) {
-        isLoading = true
+    // Function to refresh messages
+    val refreshMessages = {
         scope.launch {
-            // Sync to get latest keys before loading messages
-            syncAndProcessToDevice(30000UL)
-            messages = getRoomMessages(roomId)
-            isEncrypted = isRoomEncrypted(roomId)
+            try {
+                // More aggressive sync for encrypted rooms
+                if (isEncrypted) {
+                    println("🔐 Encrypted room detected, performing multiple syncs...")
+                    // Do multiple syncs to ensure we get all keys
+                    repeat(2) { syncAttempt ->
+                        val syncResult = syncAndProcessToDevice(30000UL)
+                        if (!syncResult) {
+                            println("⚠️  Sync attempt ${syncAttempt + 1} failed")
+                        }
+                        kotlinx.coroutines.delay(1000) // Small delay between syncs
+                    }
+                } else {
+                    // Single sync for unencrypted rooms
+                    syncAndProcessToDevice(30000UL)
+                }
 
-            // If room is encrypted, ensure encryption is properly set up
-            if (isEncrypted) {
-                ensureRoomEncryption(roomId)
-                // Sync again after setting up encryption
-                syncAndProcessToDevice(30000UL)
-                messages = getRoomMessages(roomId)
+                val newMessages = getRoomMessages(roomId)
+                val newIsEncrypted = isRoomEncrypted(roomId)
+
+                // If room became encrypted or we detected encryption, ensure setup
+                if (newIsEncrypted && !isEncrypted) {
+                    println("🔐 Room became encrypted, setting up encryption...")
+                    ensureRoomEncryption(roomId)
+                    // Additional sync after setup
+                    syncAndProcessToDevice(30000UL)
+                    val updatedMessages = getRoomMessages(roomId)
+                    messages = updatedMessages
+                } else {
+                    messages = newMessages
+                }
+                isEncrypted = newIsEncrypted
+            } catch (e: Exception) {
+                println("❌ Failed to refresh messages: ${e.message}")
             }
+        }
+    }
 
-            isLoading = false
+    LaunchedEffect(roomId, refreshTrigger) {
+        isLoading = true
+        refreshMessages()
+        isLoading = false
+    }
+
+    // Periodic refresh every 5 seconds
+    LaunchedEffect(Unit) {
+        while (true) {
+            kotlinx.coroutines.delay(5000)
+            refreshMessages()
         }
     }
 
@@ -1970,12 +2258,12 @@ fun ChatWindow(roomId: String, onClose: () -> Unit) {
                 Button(
                     onClick = {
                         if (newMessage.isNotBlank()) {
+                            val messageToSend = newMessage
+                            newMessage = ""
                             scope.launch {
-                                if (sendMessage(roomId, newMessage)) {
-                                    newMessage = ""
-                                    // Sync and refresh messages after sending
-                                    syncAndProcessToDevice(30000UL)
-                                    messages = getRoomMessages(roomId)
+                                if (sendMessage(roomId, messageToSend)) {
+                                    // Trigger refresh instead of directly updating messages
+                                    refreshTrigger++
                                 }
                             }
                         }
