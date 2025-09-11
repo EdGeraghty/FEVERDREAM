@@ -463,6 +463,81 @@ suspend fun ensureRoomEncryption(roomId: String): Boolean {
             errorOnVerifiedUserProblem = false
         )
 
+        // Step 1: Establish Olm sessions with room members (required before sharing room keys)
+        println("🔐 Establishing Olm sessions with room members...")
+        val missingSessionsRequest = machine.getMissingSessions(roomMembers)
+        if (missingSessionsRequest != null) {
+            when (missingSessionsRequest) {
+                is Request.KeysClaim -> {
+                    val keysClaimResponse = client.post("$currentHomeserver/_matrix/client/v3/keys/claim") {
+                        bearerAuth(token)
+                        contentType(ContentType.Application.Json)
+                        val body = convertMapToHashMap(missingSessionsRequest.oneTimeKeys)
+                        if (body is Map<*, *>) {
+                            @Suppress("UNCHECKED_CAST")
+                            val mapBody = body as Map<String, Any>
+                            setBody(JsonObject(mapBody.mapValues { anyToJsonElement(it.value) }))
+                        } else if (body is String) {
+                            setBody(json.parseToJsonElement(body))
+                        }
+                    }
+                    if (keysClaimResponse.status == HttpStatusCode.OK) {
+                        println("✅ One-time keys claimed for session establishment")
+                    } else {
+                        println("❌ Failed to claim one-time keys: ${keysClaimResponse.status}")
+                    }
+                }
+                else -> {
+                    println("⚠️  Unexpected request type for missing sessions: ${missingSessionsRequest::class.simpleName}")
+                }
+            }
+        } else {
+            println("ℹ️  No missing sessions to establish")
+        }
+
+        // Step 2: Create a room key by encrypting a dummy message if we don't have one
+        try {
+            val dummyContent = """{"body": "dummy", "msgtype": "m.text"}"""
+            val encryptedDummy = machine.encrypt(roomId, "m.room.message", dummyContent)
+            println("🔐 Created room key by encrypting dummy message")
+        } catch (e: Exception) {
+            println("⚠️  Could not create room key (may already exist): ${e.message}")
+        }
+
+        // Debug: Check room key counts
+        val keyCounts = machine.roomKeyCounts()
+        println("🔑 Room key counts - Total: ${keyCounts.total}, Backed up: ${keyCounts.backedUp}")
+
+        // Debug: Check devices for each room member
+        for (member in roomMembers) {
+            try {
+                val userDevices = machine.getUserDevices(member, 30000U)
+                println("📱 User $member has ${userDevices.size} devices")
+                if (userDevices.isNotEmpty()) {
+                    println("   Device IDs: ${userDevices.map { it.deviceId }}")
+                    println("   Curve25519 keys: ${userDevices.map { it.keys["curve25519"] }}")
+                } else {
+                    println("   No devices found for user $member")
+                }
+            } catch (e: Exception) {
+                println("⚠️  Could not get devices for user $member: ${e.message}")
+                e.printStackTrace()
+            }
+        }
+
+        // Debug: Check if we have any tracked users
+        try {
+            // Note: trackedUsers property is not directly accessible via OlmMachine interface
+            // We can check individual users with isUserTracked() instead
+            val trackedStatus = allRoomMembers.map { member ->
+                "$member: ${machine.isUserTracked(member)}"
+            }
+            println("👥 Tracked status for room members: $trackedStatus")
+        } catch (e: Exception) {
+            println("⚠️  Could not check tracked users: ${e.message}")
+        }
+
+        // Step 3: Share the room key with room members
         val roomKeyRequests = machine.shareRoomKey(roomId, roomMembers, encryptionSettings)
         println("🔐 Room key requests for setup: ${roomKeyRequests.size}")
 
@@ -712,7 +787,7 @@ suspend fun ensureRoomEncryption(roomId: String): Boolean {
 }
 
 suspend fun startPeriodicSync() {
-    while (true) {
+    while (kotlin.coroutines.coroutineContext.isActive) {
         try {
             // Sync every 5 seconds for better responsiveness to key sharing
             kotlinx.coroutines.delay(5000)

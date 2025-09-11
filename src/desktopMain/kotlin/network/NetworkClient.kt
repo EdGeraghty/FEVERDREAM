@@ -27,6 +27,11 @@ val client = HttpClient(CIO) {
     }
 }
 
+// Function to properly close the HTTP client
+fun closeHttpClient() {
+    client.close()
+}
+
 // Utility function to convert Maps to HashMap recursively to avoid serialization issues with SingletonMap
 @Suppress("UNCHECKED_CAST")
 fun convertMapToHashMap(map: Any?): Any? {

@@ -1,6 +1,5 @@
 package ui
 
-import androidx.compose.desktop.ui.tooling.preview.Preview
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -14,9 +13,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.*
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.application
-import androidx.compose.ui.window.Window
-import kotlin.system.exitProcess
 import kotlinx.coroutines.*
 import models.*
 import network.*
@@ -32,12 +28,12 @@ sealed class Screen {
 }
 
 @Composable
-@Preview
 fun MatrixApp() {
     val scope = rememberCoroutineScope()
     var currentScreen by remember { mutableStateOf<Screen>(Screen.Login) }
     var loginError by remember { mutableStateOf<String?>(null) }
     var isLoading by remember { mutableStateOf(false) }
+    var isPeriodicSyncRunning by remember { mutableStateOf(false) }
 
     // Load session on startup
     LaunchedEffect(Unit) {
@@ -50,8 +46,11 @@ fun MatrixApp() {
             currentSyncToken = session.syncToken
             crypto.initializeEncryption(session.userId, session.deviceId)
             currentScreen = Screen.Rooms
-            // Start periodic sync
-            scope.launch { crypto.startPeriodicSync() }
+            // Start periodic sync only if not already running
+            if (!isPeriodicSyncRunning) {
+                isPeriodicSyncRunning = true
+                scope.launch { crypto.startPeriodicSync() }
+            }
         }
     }
 
@@ -66,8 +65,11 @@ fun MatrixApp() {
                             val result = login(username, password, homeserver)
                             if (result != null) {
                                 currentScreen = Screen.Rooms
-                                // Start periodic sync
-                                scope.launch { crypto.startPeriodicSync() }
+                                // Start periodic sync only if not already running
+                                if (!isPeriodicSyncRunning) {
+                                    isPeriodicSyncRunning = true
+                                    scope.launch { crypto.startPeriodicSync() }
+                                }
                             } else {
                                 loginError = "Login failed"
                             }
@@ -89,7 +91,18 @@ fun MatrixApp() {
                         currentAccessToken = null
                         currentUserId = null
                         currentDeviceId = null
+                        // Properly dispose of OlmMachine resources
+                        olmMachine?.let { machine ->
+                            try {
+                                // Close the OlmMachine to free native resources
+                                (machine as? AutoCloseable)?.close()
+                                println("✅ OlmMachine resources cleaned up")
+                            } catch (e: Exception) {
+                                println("⚠️  Error cleaning up OlmMachine: ${e.message}")
+                            }
+                        }
                         olmMachine = null
+                        isPeriodicSyncRunning = false  // Reset periodic sync flag
                         currentScreen = Screen.Login
                     }
                 }
@@ -231,6 +244,15 @@ fun RoomsScreen(
             rooms = getJoinedRooms()
             invites = getRoomInvites()
             isLoading = false
+            
+            // Debug: Trigger encryption setup for all joined rooms
+            if (rooms.isNotEmpty()) {
+                println("🔧 DEBUG: Found ${rooms.size} joined rooms, triggering encryption setup...")
+                for (roomId in rooms) {
+                    println("🔧 DEBUG: Setting up encryption for room: $roomId")
+                    crypto.ensureRoomEncryption(roomId)
+                }
+            }
         }
     }
 
