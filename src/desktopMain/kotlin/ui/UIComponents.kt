@@ -245,14 +245,8 @@ fun RoomsScreen(
             invites = getRoomInvites()
             isLoading = false
             
-            // Debug: Trigger encryption setup for all joined rooms
-            if (rooms.isNotEmpty()) {
-                println("🔧 DEBUG: Found ${rooms.size} joined rooms, triggering encryption setup...")
-                for (roomId in rooms) {
-                    println("🔧 DEBUG: Setting up encryption for room: $roomId")
-                    crypto.ensureRoomEncryption(roomId)
-                }
-            }
+            // Removed: Encryption setup for all rooms on load - too slow and blocks UI
+            // Only set up encryption when actually needed (entering room or sending message)
         }
     }
 
@@ -371,8 +365,8 @@ fun ChatScreen(
 
     LaunchedEffect(roomId) {
         scope.launch {
-            // Ensure room encryption is set up before loading messages
-            crypto.ensureRoomEncryption(roomId)
+            // Removed: ensureRoomEncryption call - too slow for UI initialization
+            // Only set up encryption when actually sending a message
             messages = getRoomMessages(roomId)
             isLoading = false
         }
@@ -458,6 +452,8 @@ fun ChatScreen(
                             if (newMessage.isNotBlank()) {
                                 scope.launch {
                                     isSending = true
+                                    // Ensure encryption is set up before sending message
+                                    crypto.ensureRoomEncryption(roomId)
                                     if (sendMessage(roomId, newMessage)) {
                                         newMessage = ""
                                         // Refresh messages
