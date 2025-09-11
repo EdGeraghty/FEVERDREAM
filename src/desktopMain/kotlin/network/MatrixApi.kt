@@ -518,9 +518,18 @@ suspend fun getRoomMessages(roomId: String): List<Event> {
                                                 if (body is Map<*, *>) {
                                                     @Suppress("UNCHECKED_CAST")
                                                     val mapBody = body as Map<String, Any>
-                                                    setBody(JsonObject(mapBody.mapValues { anyToJsonElement(it.value) }))
+                                                    // Wrap the body in the "messages" structure as required by Matrix API
+                                                    val messagesBody = mapOf("messages" to JsonObject(mapBody.mapValues { anyToJsonElement(it.value) }))
+                                                    setBody(JsonObject(messagesBody))
                                                 } else if (body is String) {
-                                                    setBody(json.parseToJsonElement(body))
+                                                    // Parse the string and wrap it in messages structure
+                                                    val parsedBody = json.parseToJsonElement(body)
+                                                    if (parsedBody is JsonObject) {
+                                                        val messagesBody = mapOf("messages" to parsedBody)
+                                                        setBody(JsonObject(messagesBody))
+                                                    } else {
+                                                        setBody(json.parseToJsonElement(body))
+                                                    }
                                                 }
                                             }
                                             if (keysQueryResponse.status == HttpStatusCode.OK) {
@@ -544,9 +553,18 @@ suspend fun getRoomMessages(roomId: String): List<Event> {
                                                     if (body is Map<*, *>) {
                                                         @Suppress("UNCHECKED_CAST")
                                                         val mapBody = body as Map<String, Any>
-                                                        setBody(JsonObject(mapBody.mapValues { anyToJsonElement(it.value) }))
+                                                        // Wrap the body in the "messages" structure as required by Matrix API
+                                                        val messagesBody = mapOf("messages" to JsonObject(mapBody.mapValues { anyToJsonElement(it.value) }))
+                                                        setBody(JsonObject(messagesBody))
                                                     } else if (body is String) {
-                                                        setBody(json.parseToJsonElement(body))
+                                                        // Parse the string and wrap it in messages structure
+                                                        val parsedBody = json.parseToJsonElement(body)
+                                                        if (parsedBody is JsonObject) {
+                                                            val messagesBody = mapOf("messages" to parsedBody)
+                                                            setBody(JsonObject(messagesBody))
+                                                        } else {
+                                                            setBody(json.parseToJsonElement(body))
+                                                        }
                                                     }
                                                 }
                                                 if (cancelResponse.status == HttpStatusCode.OK) {
