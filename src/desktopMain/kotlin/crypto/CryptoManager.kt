@@ -6,6 +6,7 @@ import io.ktor.http.*
 import kotlinx.coroutines.*
 import kotlinx.serialization.json.*
 import network.*
+import network.client
 import models.*
 import org.matrix.rustcomponents.sdk.crypto.*
 import uniffi.matrix_sdk_crypto.*
@@ -789,8 +790,8 @@ suspend fun ensureRoomEncryption(roomId: String): Boolean {
 suspend fun startPeriodicSync() {
     while (kotlin.coroutines.coroutineContext.isActive) {
         try {
-            // Sync every 5 seconds for better responsiveness to key sharing
-            kotlinx.coroutines.delay(5000)
+            // Sync every 60 seconds to reduce load and prevent UI freezing
+            kotlinx.coroutines.delay(60000)
             if (currentAccessToken != null && olmMachine != null) {
                 val syncResult = syncAndProcessToDevice(30000UL)
                 if (syncResult) {
@@ -801,6 +802,8 @@ suspend fun startPeriodicSync() {
             }
         } catch (e: Exception) {
             println("❌ Periodic sync error: ${e.message}")
+            // Delay longer on error
+            kotlinx.coroutines.delay(120000)
         }
     }
 }

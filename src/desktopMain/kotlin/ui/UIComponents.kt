@@ -342,10 +342,11 @@ fun RoomsScreen(
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(roomId)
-                                val isEncrypted = runBlocking { crypto.isRoomEncrypted(roomId) }
-                                if (isEncrypted) {
-                                    Text("🔒 Encrypted", style = MaterialTheme.typography.caption, color = MaterialTheme.colors.primary)
-                                }
+                                // TODO: Show encryption status asynchronously to avoid UI freezing
+                                // val isEncrypted = runBlocking { crypto.isRoomEncrypted(roomId) }
+                                // if (isEncrypted) {
+                                //     Text("🔒 Encrypted", style = MaterialTheme.typography.caption, color = MaterialTheme.colors.primary)
+                                // }
                             }
                             Icon(Icons.Default.ArrowForward, contentDescription = "Enter room")
                         }
