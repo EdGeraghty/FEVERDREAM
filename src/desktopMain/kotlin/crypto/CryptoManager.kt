@@ -101,10 +101,10 @@ suspend fun syncAndProcessToDevice(timeout: ULong = 30000UL): Boolean {
                 // Convert events to JSON strings - each event should be a separate string
                 val toDeviceEventJsons = toDeviceEvents.map { json.encodeToString(it) }
 
-                // Process with OlmMachine - pass as array of strings
+                // Process with OlmMachine - pass as individual strings, not array
                 val decryptionSettings = DecryptionSettings(senderDeviceTrustRequirement = TrustRequirement.UNTRUSTED)
                 val syncChanges = machine.receiveSyncChanges(
-                    events = toDeviceEventJsons.joinToString(",", "[", "]"), // Array format
+                    events = toDeviceEventJsons.joinToString(","), // Individual events separated by comma, no array brackets
                     deviceChanges = DeviceLists(emptyList(), emptyList()), // Empty device lists
                     keyCounts = emptyMap<String, Int>(), // Empty key counts map
                     unusedFallbackKeys = null,
@@ -380,8 +380,60 @@ suspend fun ensureRoomEncryption(roomId: String): Boolean {
                         println("❌ Failed to claim initial one-time keys: ${keysClaimResponse.status}")
                     }
                 }
-                else -> {
-                    println("⚠️  Unhandled initial request type: ${request::class.simpleName}")
+                is Request.ToDevice -> {
+                    val toDeviceResponse = client.put("$currentHomeserver/_matrix/client/v3/sendToDevice/${request.eventType}/${System.currentTimeMillis()}") {
+                        bearerAuth(token)
+                        contentType(ContentType.Application.Json)
+                        val body = convertMapToHashMap(request.body)
+                        if (body is Map<*, *>) {
+                            @Suppress("UNCHECKED_CAST")
+                            val mapBody = body as Map<String, Any>
+                            setBody(JsonObject(mapBody.mapValues { anyToJsonElement(it.value) }))
+                        } else if (body is String) {
+                            setBody(json.parseToJsonElement(body))
+                        }
+                    }
+                    if (toDeviceResponse.status == HttpStatusCode.OK) {
+                        println("✅ Initial to-device request sent")
+                    } else {
+                        println("❌ Failed to send initial to-device request: ${toDeviceResponse.status}")
+                    }
+                }
+                is Request.KeysBackup -> {
+                    // Handle keys backup request
+                    println("⚠️  KeysBackup request not implemented")
+                }
+                is Request.RoomMessage -> {
+                    // Handle room message request
+                    val roomMessageResponse = client.put("$currentHomeserver/_matrix/client/r0/rooms/${request.roomId}/send/${request.eventType}/${System.currentTimeMillis()}") {
+                        bearerAuth(token)
+                        contentType(ContentType.Application.Json)
+                        setBody(json.parseToJsonElement(request.content))
+                    }
+                    if (roomMessageResponse.status == HttpStatusCode.OK) {
+                        println("✅ Room message sent successfully")
+                    } else {
+                        println("❌ Failed to send room message: ${roomMessageResponse.status}")
+                    }
+                }
+                is Request.SignatureUpload -> {
+                    val signatureUploadResponse = client.post("$currentHomeserver/_matrix/client/v3/keys/signatures/upload") {
+                        bearerAuth(token)
+                        contentType(ContentType.Application.Json)
+                        val body = convertMapToHashMap(request.body)
+                        if (body is Map<*, *>) {
+                            @Suppress("UNCHECKED_CAST")
+                            val mapBody = body as Map<String, Any>
+                            setBody(JsonObject(mapBody.mapValues { anyToJsonElement(it.value) }))
+                        } else if (body is String) {
+                            setBody(json.parseToJsonElement(body))
+                        }
+                    }
+                    if (signatureUploadResponse.status == HttpStatusCode.OK) {
+                        println("✅ Signature uploaded successfully")
+                    } else {
+                        println("❌ Failed to upload signature: ${signatureUploadResponse.status}")
+                    }
                 }
             }
         }
@@ -573,8 +625,60 @@ suspend fun ensureRoomEncryption(roomId: String): Boolean {
                         println("❌ Failed to claim remaining one-time keys: ${keysClaimResponse.status}")
                     }
                 }
-                else -> {
-                    println("⚠️  Unhandled remaining request type: ${request::class.simpleName}")
+                is Request.ToDevice -> {
+                    val response = client.put("$currentHomeserver/_matrix/client/v3/sendToDevice/${request.eventType}/${System.currentTimeMillis()}") {
+                        bearerAuth(token)
+                        contentType(ContentType.Application.Json)
+                        val body = convertMapToHashMap(request.body)
+                        if (body is Map<*, *>) {
+                            @Suppress("UNCHECKED_CAST")
+                            val mapBody = body as Map<String, Any>
+                            setBody(JsonObject(mapBody.mapValues { anyToJsonElement(it.value) }))
+                        } else if (body is String) {
+                            setBody(json.parseToJsonElement(body))
+                        }
+                    }
+                    if (response.status == HttpStatusCode.OK) {
+                        println("✅ Remaining to-device request sent successfully")
+                    } else {
+                        println("❌ Failed to send remaining to-device request: ${response.status}")
+                    }
+                }
+                is Request.KeysBackup -> {
+                    // Handle keys backup request
+                    println("⚠️  KeysBackup request not implemented")
+                }
+                is Request.RoomMessage -> {
+                    // Handle room message request
+                    val roomMessageResponse = client.put("$currentHomeserver/_matrix/client/r0/rooms/${request.roomId}/send/${request.eventType}/${System.currentTimeMillis()}") {
+                        bearerAuth(token)
+                        contentType(ContentType.Application.Json)
+                        setBody(json.parseToJsonElement(request.content))
+                    }
+                    if (roomMessageResponse.status == HttpStatusCode.OK) {
+                        println("✅ Room message sent successfully")
+                    } else {
+                        println("❌ Failed to send room message: ${roomMessageResponse.status}")
+                    }
+                }
+                is Request.SignatureUpload -> {
+                    val signatureUploadResponse = client.post("$currentHomeserver/_matrix/client/v3/keys/signatures/upload") {
+                        bearerAuth(token)
+                        contentType(ContentType.Application.Json)
+                        val body = convertMapToHashMap(request.body)
+                        if (body is Map<*, *>) {
+                            @Suppress("UNCHECKED_CAST")
+                            val mapBody = body as Map<String, Any>
+                            setBody(JsonObject(mapBody.mapValues { anyToJsonElement(it.value) }))
+                        } else if (body is String) {
+                            setBody(json.parseToJsonElement(body))
+                        }
+                    }
+                    if (signatureUploadResponse.status == HttpStatusCode.OK) {
+                        println("✅ Signature uploaded successfully")
+                    } else {
+                        println("❌ Failed to upload signature: ${signatureUploadResponse.status}")
+                    }
                 }
             }
         }

@@ -503,8 +503,8 @@ suspend fun getRoomMessages(roomId: String): List<Event> {
                                 println("🔑 Room key missing, attempting to request keys...")
                                 try {
                                     // Request missing keys from other devices
-                                    val eventJson = json.encodeToString(event)
-                                    val keyRequestPair = machine.requestRoomKey(eventJson, roomId)
+                                    val eventJsonForKeyRequest = json.encodeToString(event)
+                                    val keyRequestPair = machine.requestRoomKey(eventJsonForKeyRequest, roomId)
                                     
                                     // Send the key request
                                     val keyRequest = keyRequestPair.keyRequest
@@ -568,11 +568,11 @@ suspend fun getRoomMessages(roomId: String): List<Event> {
 
                                     // Try decryption again
                                     try {
-                                        val eventJson = json.encodeToString(event)
+                                        val eventJsonForRetry = json.encodeToString(event)
                                         val decryptionSettings = DecryptionSettings(senderDeviceTrustRequirement = TrustRequirement.UNTRUSTED)
                                         val decrypted = machine.decryptRoomEvent(
                                             roomId = roomId,
-                                            event = eventJson,
+                                            event = eventJsonForRetry,
                                             decryptionSettings = decryptionSettings,
                                             handleVerificationEvents = false,
                                             strictShields = false
