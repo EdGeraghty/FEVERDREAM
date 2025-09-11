@@ -1,4 +1,5 @@
 import androidx.compose.desktop.ui.tooling.preview.Preview
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -1565,10 +1566,9 @@ suspend fun ensureRoomEncryption(roomId: String): Boolean {
         println("❌ Failed to ensure room encryption for $roomId: ${e.message}")
         return false
     }
-    val token = currentAccessToken ?: return false
-    val machine = olmMachine ?: return false
 
     try {
+        // Request missing keys for the room
         println("🔑 Requesting missing keys for room: $roomId")
 
         // Get room members to query their keys
@@ -1936,13 +1936,13 @@ fun RoomsScreen(
                             ) {
                                 Column(modifier = Modifier.weight(1f)) {
                                     Text("Invite from ${invite.sender}")
-                                    Text(invite.roomId, style = MaterialTheme.typography.caption)
+                                    Text(invite.room_id, style = MaterialTheme.typography.caption)
                                 }
                                 Row {
                                     Button(
                                         onClick = {
                                             scope.launch {
-                                                if (acceptRoomInvite(invite.roomId)) {
+                                                if (acceptRoomInvite(invite.room_id)) {
                                                     rooms = getJoinedRooms()
                                                     invites = getRoomInvites()
                                                 }
@@ -1955,7 +1955,7 @@ fun RoomsScreen(
                                     Button(
                                         onClick = {
                                             scope.launch {
-                                                rejectRoomInvite(invite.roomId)
+                                                rejectRoomInvite(invite.room_id)
                                                 invites = getRoomInvites()
                                             }
                                         }
@@ -2116,6 +2116,13 @@ fun ChatScreen(
             }
         }
     }
+}
+
+// Screen navigation enum
+sealed class Screen {
+    object Login : Screen()
+    object Rooms : Screen()
+    data class Chat(val roomId: String) : Screen()
 }
 
 

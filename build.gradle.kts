@@ -6,7 +6,7 @@ plugins {
 
 kotlin {
     jvm("desktop") {
-        jvmToolchain(17)
+        // Use system Java instead of specific toolchain
     }
     sourceSets {
         val commonMain by getting {
