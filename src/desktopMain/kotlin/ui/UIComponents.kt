@@ -29,7 +29,8 @@ sealed class Screen {
 
 @Composable
 fun MatrixApp() {
-    val scope = rememberCoroutineScope()
+    // Use GlobalScope for long-running operations to avoid composition cancellation
+    val appScope = remember { kotlinx.coroutines.GlobalScope }
     var currentScreen by remember { mutableStateOf<Screen>(Screen.Login) }
     var loginError by remember { mutableStateOf<String?>(null) }
     var isLoading by remember { mutableStateOf(false) }
@@ -49,7 +50,7 @@ fun MatrixApp() {
             // Start periodic sync only if not already running
             if (!isPeriodicSyncRunning) {
                 isPeriodicSyncRunning = true
-                scope.launch { crypto.startPeriodicSync() }
+                appScope.launch { crypto.startPeriodicSync() }
             }
         }
     }
@@ -58,7 +59,7 @@ fun MatrixApp() {
         when (currentScreen) {
             is Screen.Login -> LoginScreen(
                 onLogin = { username, password, homeserver ->
-                    scope.launch {
+                    appScope.launch {
                         isLoading = true
                         loginError = null
                         try {
@@ -68,7 +69,7 @@ fun MatrixApp() {
                                 // Start periodic sync only if not already running
                                 if (!isPeriodicSyncRunning) {
                                     isPeriodicSyncRunning = true
-                                    scope.launch { crypto.startPeriodicSync() }
+                                    appScope.launch { crypto.startPeriodicSync() }
                                 }
                             } else {
                                 loginError = "Login failed"
@@ -86,7 +87,7 @@ fun MatrixApp() {
             is Screen.Rooms -> RoomsScreen(
                 onRoomSelected = { roomId -> currentScreen = Screen.Chat(roomId) },
                 onLogout = {
-                    scope.launch {
+                    appScope.launch {
                         clearSession()
                         currentAccessToken = null
                         currentUserId = null
@@ -234,7 +235,8 @@ fun RoomsScreen(
     onRoomSelected: (String) -> Unit,
     onLogout: () -> Unit
 ) {
-    val scope = rememberCoroutineScope()
+    // Use GlobalScope for long-running operations
+    val scope = remember { kotlinx.coroutines.GlobalScope }
     var rooms by remember { mutableStateOf<List<String>>(emptyList()) }
     var invites by remember { mutableStateOf<List<RoomInvite>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
@@ -244,9 +246,6 @@ fun RoomsScreen(
             rooms = getJoinedRooms()
             invites = getRoomInvites()
             isLoading = false
-            
-            // Removed: Encryption setup for all rooms on load - too slow and blocks UI
-            // Only set up encryption when actually needed (entering room or sending message)
         }
     }
 
@@ -356,7 +355,8 @@ fun ChatScreen(
     roomId: String,
     onBack: () -> Unit
 ) {
-    val scope = rememberCoroutineScope()
+    // Use GlobalScope for long-running operations to avoid composition cancellation
+    val scope = remember { kotlinx.coroutines.GlobalScope }
     var messages by remember { mutableStateOf<List<Event>>(emptyList()) }
     var newMessage by remember { mutableStateOf("") }
     var isLoading by remember { mutableStateOf(true) }
