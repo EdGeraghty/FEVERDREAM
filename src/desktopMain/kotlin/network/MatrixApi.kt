@@ -503,35 +503,58 @@ suspend fun getRoomMessages(roomId: String): List<Event> {
                                 println("🔑 Room key missing, attempting to request keys...")
                                 try {
                                     // Request missing keys from other devices
-                                    val keyRequests = machine.outgoingRequests()
-                                    for (request in keyRequests) {
-                                        when (request) {
-                                            is Request.KeysQuery -> {
-                                                println("📤 Sending keys query to request missing keys")
-                                                val keysQueryResponse = client.post("$currentHomeserver/_matrix/client/v3/keys/query") {
+                                    val eventJson = json.encodeToString(event)
+                                    val keyRequestPair = machine.requestRoomKey(eventJson, roomId)
+                                    
+                                    // Send the key request
+                                    val keyRequest = keyRequestPair.keyRequest
+                                    when (keyRequest) {
+                                        is Request.ToDevice -> {
+                                            println("📤 Sending room key request")
+                                            val keysQueryResponse = client.put("$currentHomeserver/_matrix/client/v3/sendToDevice/${keyRequest.eventType}/${System.currentTimeMillis()}") {
+                                                bearerAuth(token)
+                                                contentType(ContentType.Application.Json)
+                                                val body = convertMapToHashMap(keyRequest.body)
+                                                if (body is Map<*, *>) {
+                                                    @Suppress("UNCHECKED_CAST")
+                                                    val mapBody = body as Map<String, Any>
+                                                    setBody(JsonObject(mapBody.mapValues { anyToJsonElement(it.value) }))
+                                                } else if (body is String) {
+                                                    setBody(json.parseToJsonElement(body))
+                                                }
+                                            }
+                                            if (keysQueryResponse.status == HttpStatusCode.OK) {
+                                                println("✅ Room key request sent")
+                                            }
+                                        }
+                                        else -> {
+                                            println("⚠️  Unexpected request type for key request: ${keyRequest::class.simpleName}")
+                                        }
+                                    }
+                                    
+                                    // If there's a cancellation request, send it too
+                                    keyRequestPair.cancellation?.let { cancellation ->
+                                        when (cancellation) {
+                                            is Request.ToDevice -> {
+                                                println("📤 Sending key request cancellation")
+                                                val cancelResponse = client.put("$currentHomeserver/_matrix/client/v3/sendToDevice/${cancellation.eventType}/${System.currentTimeMillis()}") {
                                                     bearerAuth(token)
                                                     contentType(ContentType.Application.Json)
-                                                    val convertedUsers = convertMapToHashMap(request.users)
-                                                    if (convertedUsers is Map<*, *>) {
+                                                    val body = convertMapToHashMap(cancellation.body)
+                                                    if (body is Map<*, *>) {
                                                         @Suppress("UNCHECKED_CAST")
-                                                        val usersMap = convertedUsers as Map<String, Any>
-                                                        val deviceKeys = mutableMapOf<String, JsonElement>()
-                                                        for ((user, devicesAny) in usersMap) {
-                                                            val devices = devicesAny as? List<String> ?: emptyList()
-                                                            val jsonDevices = devices.map { kotlinx.serialization.json.JsonPrimitive(it) }
-                                                            deviceKeys[user] = JsonArray(jsonDevices)
-                                                        }
-                                                        setBody(JsonObject(mapOf("device_keys" to JsonObject(deviceKeys))))
-                                                    } else {
-                                                        setBody(JsonObject(mapOf("device_keys" to JsonObject(emptyMap()))))
+                                                        val mapBody = body as Map<String, Any>
+                                                        setBody(JsonObject(mapBody.mapValues { anyToJsonElement(it.value) }))
+                                                    } else if (body is String) {
+                                                        setBody(json.parseToJsonElement(body))
                                                     }
                                                 }
-                                                if (keysQueryResponse.status == HttpStatusCode.OK) {
-                                                    println("✅ Keys query sent for missing keys")
+                                                if (cancelResponse.status == HttpStatusCode.OK) {
+                                                    println("✅ Key request cancellation sent")
                                                 }
                                             }
                                             else -> {
-                                                // Handle other requests if needed
+                                                println("⚠️  Unexpected request type for cancellation: ${cancellation::class.simpleName}")
                                             }
                                         }
                                     }

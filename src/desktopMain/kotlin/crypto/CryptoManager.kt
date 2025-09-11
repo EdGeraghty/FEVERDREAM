@@ -184,8 +184,60 @@ suspend fun syncAndProcessToDevice(timeout: ULong = 30000UL): Boolean {
                                     println("❌ Failed to upload keys: ${keysUploadResponse.status}")
                                 }
                             }
-                            else -> {
-                                println("⚠️  Unhandled outgoing request type: ${request::class.simpleName}")
+                            is Request.KeysClaim -> {
+                                val keysClaimResponse = client.post("$currentHomeserver/_matrix/client/v3/keys/claim") {
+                                    bearerAuth(token)
+                                    contentType(ContentType.Application.Json)
+                                    val body = convertMapToHashMap(request.oneTimeKeys)
+                                    if (body is Map<*, *>) {
+                                        @Suppress("UNCHECKED_CAST")
+                                        val mapBody = body as Map<String, Any>
+                                        setBody(JsonObject(mapBody.mapValues { anyToJsonElement(it.value) }))
+                                    } else if (body is String) {
+                                        setBody(json.parseToJsonElement(body))
+                                    }
+                                }
+                                if (keysClaimResponse.status == HttpStatusCode.OK) {
+                                    println("✅ One-time keys claimed successfully")
+                                } else {
+                                    println("❌ Failed to claim one-time keys: ${keysClaimResponse.status}")
+                                }
+                            }
+                            is Request.KeysBackup -> {
+                                // Handle keys backup request
+                                println("⚠️  KeysBackup request not implemented")
+                            }
+                            is Request.RoomMessage -> {
+                                // Handle room message request
+                                val roomMessageResponse = client.put("$currentHomeserver/_matrix/client/r0/rooms/${request.roomId}/send/${request.eventType}/${System.currentTimeMillis()}") {
+                                    bearerAuth(token)
+                                    contentType(ContentType.Application.Json)
+                                    setBody(json.parseToJsonElement(request.content))
+                                }
+                                if (roomMessageResponse.status == HttpStatusCode.OK) {
+                                    println("✅ Room message sent successfully")
+                                } else {
+                                    println("❌ Failed to send room message: ${roomMessageResponse.status}")
+                                }
+                            }
+                            is Request.SignatureUpload -> {
+                                val signatureUploadResponse = client.post("$currentHomeserver/_matrix/client/v3/keys/signatures/upload") {
+                                    bearerAuth(token)
+                                    contentType(ContentType.Application.Json)
+                                    val body = convertMapToHashMap(request.body)
+                                    if (body is Map<*, *>) {
+                                        @Suppress("UNCHECKED_CAST")
+                                        val mapBody = body as Map<String, Any>
+                                        setBody(JsonObject(mapBody.mapValues { anyToJsonElement(it.value) }))
+                                    } else if (body is String) {
+                                        setBody(json.parseToJsonElement(body))
+                                    }
+                                }
+                                if (signatureUploadResponse.status == HttpStatusCode.OK) {
+                                    println("✅ Signature uploaded successfully")
+                                } else {
+                                    println("❌ Failed to upload signature: ${signatureUploadResponse.status}")
+                                }
                             }
                         }
                     }
@@ -307,6 +359,25 @@ suspend fun ensureRoomEncryption(roomId: String): Boolean {
                     }
                     if (response.status == HttpStatusCode.OK) {
                         println("✅ Initial keys uploaded")
+                    }
+                }
+                is Request.KeysClaim -> {
+                    val keysClaimResponse = client.post("$currentHomeserver/_matrix/client/v3/keys/claim") {
+                        bearerAuth(token)
+                        contentType(ContentType.Application.Json)
+                        val body = convertMapToHashMap(request.oneTimeKeys)
+                        if (body is Map<*, *>) {
+                            @Suppress("UNCHECKED_CAST")
+                            val mapBody = body as Map<String, Any>
+                            setBody(JsonObject(mapBody.mapValues { anyToJsonElement(it.value) }))
+                        } else if (body is String) {
+                            setBody(json.parseToJsonElement(body))
+                        }
+                    }
+                    if (keysClaimResponse.status == HttpStatusCode.OK) {
+                        println("✅ Initial one-time keys claimed successfully")
+                    } else {
+                        println("❌ Failed to claim initial one-time keys: ${keysClaimResponse.status}")
                     }
                 }
                 else -> {
@@ -481,6 +552,25 @@ suspend fun ensureRoomEncryption(roomId: String): Boolean {
                         println("✅ Processed remaining keys query response: ${syncChanges.roomKeyInfos.size} room keys, ${changedUsersList.size} users updated")
                     } else {
                         println("❌ Failed to send remaining keys query: ${keysQueryResponse.status}")
+                    }
+                }
+                is Request.KeysClaim -> {
+                    val keysClaimResponse = client.post("$currentHomeserver/_matrix/client/v3/keys/claim") {
+                        bearerAuth(token)
+                        contentType(ContentType.Application.Json)
+                        val body = convertMapToHashMap(request.oneTimeKeys)
+                        if (body is Map<*, *>) {
+                            @Suppress("UNCHECKED_CAST")
+                            val mapBody = body as Map<String, Any>
+                            setBody(JsonObject(mapBody.mapValues { anyToJsonElement(it.value) }))
+                        } else if (body is String) {
+                            setBody(json.parseToJsonElement(body))
+                        }
+                    }
+                    if (keysClaimResponse.status == HttpStatusCode.OK) {
+                        println("✅ Remaining one-time keys claimed successfully")
+                    } else {
+                        println("❌ Failed to claim remaining one-time keys: ${keysClaimResponse.status}")
                     }
                 }
                 else -> {
