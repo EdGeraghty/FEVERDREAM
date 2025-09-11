@@ -515,7 +515,12 @@ suspend fun getRoomMessages(roomId: String): List<Event> {
                                                     if (convertedUsers is Map<*, *>) {
                                                         @Suppress("UNCHECKED_CAST")
                                                         val usersMap = convertedUsers as Map<String, Any>
-                                                        val deviceKeys = usersMap.mapValues { JsonArray(emptyList<JsonElement>()) }
+                                                        val deviceKeys = mutableMapOf<String, JsonElement>()
+                                                        for ((user, devicesAny) in usersMap) {
+                                                            val devices = devicesAny as? List<String> ?: emptyList()
+                                                            val jsonDevices = devices.map { kotlinx.serialization.json.JsonPrimitive(it) }
+                                                            deviceKeys[user] = JsonArray(jsonDevices)
+                                                        }
                                                         setBody(JsonObject(mapOf("device_keys" to JsonObject(deviceKeys))))
                                                     } else {
                                                         setBody(JsonObject(mapOf("device_keys" to JsonObject(emptyMap()))))

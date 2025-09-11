@@ -348,6 +348,8 @@ fun ChatScreen(
 
     LaunchedEffect(roomId) {
         scope.launch {
+            // Ensure room encryption is set up before loading messages
+            crypto.ensureRoomEncryption(roomId)
             messages = getRoomMessages(roomId)
             isLoading = false
         }

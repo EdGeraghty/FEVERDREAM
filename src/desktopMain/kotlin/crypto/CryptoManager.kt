@@ -150,7 +150,10 @@ suspend fun syncAndProcessToDevice(timeout: ULong = 30000UL): Boolean {
                                     if (convertedUsers is Map<*, *>) {
                                         @Suppress("UNCHECKED_CAST")
                                         val usersMap = convertedUsers as Map<String, Any>
-                                        val deviceKeys = usersMap.mapValues { JsonArray(emptyList<JsonElement>()) }
+                                        val deviceKeys = usersMap.mapValues { entry ->
+                                            val devices = entry.value as? List<String> ?: emptyList()
+                                            JsonArray(devices.map { JsonPrimitive(it) })
+                                        }
                                         setBody(JsonObject(mapOf("device_keys" to JsonObject(deviceKeys))))
                                     } else {
                                         setBody(JsonObject(mapOf("device_keys" to JsonObject(emptyMap()))))
@@ -321,7 +324,10 @@ suspend fun ensureRoomEncryption(roomId: String): Boolean {
                         if (convertedUsers is Map<*, *>) {
                             @Suppress("UNCHECKED_CAST")
                             val usersMap = convertedUsers as Map<String, Any>
-                            val deviceKeys = usersMap.mapValues { JsonArray(emptyList<JsonElement>()) }
+                            val deviceKeys = usersMap.mapValues { entry ->
+                                val devices = entry.value as? List<String> ?: emptyList()
+                                JsonArray(devices.map { JsonPrimitive(it) })
+                            }
                             setBody(JsonObject(mapOf("device_keys" to JsonObject(deviceKeys))))
                         } else {
                             setBody(JsonObject(mapOf("device_keys" to JsonObject(emptyMap()))))
