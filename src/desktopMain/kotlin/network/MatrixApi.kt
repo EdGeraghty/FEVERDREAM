@@ -521,13 +521,25 @@ suspend fun getRoomMessages(roomId: String): List<Event> {
 
                             val eventJson = json.encodeToString(event)
                             val decryptionSettings = DecryptionSettings(senderDeviceTrustRequirement = TrustRequirement.UNTRUSTED)
-                            val decrypted = machine.decryptRoomEvent(
-                                roomId = roomId,
-                                event = eventJson,
-                                decryptionSettings = decryptionSettings,
-                                handleVerificationEvents = false,
-                                strictShields = false
-                            )
+                            
+                            // Wrap decryption in try-catch to handle session expiration panics
+                            val decrypted = try {
+                                machine.decryptRoomEvent(
+                                    roomId = roomId,
+                                    event = eventJson,
+                                    decryptionSettings = decryptionSettings,
+                                    handleVerificationEvents = false,
+                                    strictShields = false
+                                )
+                            } catch (e: Exception) {
+                                // Handle session expiration panics gracefully
+                                if (e.message?.contains("Session expired") == true || e.message?.contains("panicked") == true) {
+                                    println("⚠️  Session expired during decryption, attempting to renew...")
+                                    throw Exception("Session expired - decryption failed")
+                                } else {
+                                    throw e
+                                }
+                            }
 
                             // Parse the decrypted content and merge with original event metadata
                             val decryptedContent = try {
@@ -562,145 +574,177 @@ suspend fun getRoomMessages(roomId: String): List<Event> {
                         } catch (e: Exception) {
                             println("❌ Decryption failed: ${e.message}")
 
-                            // If decryption fails due to missing keys, try to request them
-                            if (e.message?.contains("Can't find the room key") == true) {
-                                println("🔑 Room key missing, attempting to request keys...")
-                                try {
-                                    // Request missing keys from other devices
-                                    val eventJsonForKeyRequest = json.encodeToString(event)
-                                    val keyRequestPair = machine.requestRoomKey(eventJsonForKeyRequest, roomId)
-                                    
-                                    // Send the key request
-                                    val keyRequest = keyRequestPair.keyRequest
-                                    when (keyRequest) {
-                                        is Request.ToDevice -> {
-                                            println("📤 Sending room key request")
-                                            val keysQueryResponse = client.put("$currentHomeserver/_matrix/client/v3/sendToDevice/${keyRequest.eventType}/${System.currentTimeMillis()}") {
-                                                bearerAuth(token)
-                                                contentType(ContentType.Application.Json)
-                                                // Parse the string body as JSON
-                                                val body = convertMapToHashMap(keyRequest.body)
-                                                if (body is Map<*, *>) {
-                                                    @Suppress("UNCHECKED_CAST")
-                                                    val mapBody = body as Map<String, Any>
-                                                    setBody(JsonObject(mapBody.mapValues { anyToJsonElement(it.value) }))
-                                                } else if (body is String) {
-                                                    val parsedElement = json.parseToJsonElement(body)
-                                                    if (parsedElement is JsonObject) {
-                                                        setBody(parsedElement)
-                                                    } else {
-                                                        setBody(JsonObject(mapOf()))
-                                                    }
-                                                }
-                                            }
-                                            if (keysQueryResponse.status == HttpStatusCode.OK) {
-                                                println("✅ Room key request sent")
-                                            } else {
-                                                println("❌ Failed to send room key request: ${keysQueryResponse.status}")
-                                            }
-                                        }
-                                        else -> {
-                                            println("⚠️  Unexpected key request type: ${keyRequest::class.simpleName}")
-                                        }
-                                    }
-                                    
-                                    // Send a cancellation request as well (Matrix protocol requirement)
-                                    val cancellationRequest = keyRequestPair.cancellation
-                                    if (cancellationRequest != null) {
-                                        when (cancellationRequest) {
+                            // Handle different types of decryption failures
+                            when {
+                                e.message?.contains("Session expired") == true -> {
+                                    println("⚠️  Session expired during decryption")
+                                    // Return event with session expired marker
+                                    return@map event.copy(
+                                        type = "m.room.message",
+                                        content = json.parseToJsonElement("""{"msgtype": "m.bad.encrypted", "body": "** Unable to decrypt: Session expired - please refresh the room **"}""")
+                                    )
+                                }
+                                e.message?.contains("Can't find the room key") == true -> {
+                                    println("🔑 Room key missing, attempting to request keys...")
+                                    // Try to request missing keys from other devices
+                                    try {
+                                        val eventJsonForKeyRequest = json.encodeToString(event)
+                                        val keyRequestPair = machine.requestRoomKey(eventJsonForKeyRequest, roomId)
+                                        
+                                        // Send the key request
+                                        val keyRequest = keyRequestPair.keyRequest
+                                        when (keyRequest) {
                                             is Request.ToDevice -> {
-                                                println("📤 Sending key request cancellation")
-                                                val cancelResponse = client.put("$currentHomeserver/_matrix/client/v3/sendToDevice/${cancellationRequest.eventType}/${System.currentTimeMillis()}") {
-                                                    bearerAuth(token)
-                                                    contentType(ContentType.Application.Json)
-                                                    // Parse the string body as JSON
-                                                    val body = convertMapToHashMap(cancellationRequest.body)
-                                                    if (body is Map<*, *>) {
-                                                        @Suppress("UNCHECKED_CAST")
-                                                        val mapBody = body as Map<String, Any>
-                                                        setBody(JsonObject(mapBody.mapValues { anyToJsonElement(it.value) }))
-                                                    } else if (body is String) {
-                                                        val parsedElement = json.parseToJsonElement(body)
-                                                        if (parsedElement is JsonObject) {
-                                                            setBody(parsedElement)
+                                                println("📤 Sending room key request")
+                                                try {
+                                                    val keysQueryResponse = client.put("$currentHomeserver/_matrix/client/v3/sendToDevice/${keyRequest.eventType}/${System.currentTimeMillis()}") {
+                                                        bearerAuth(token)
+                                                        contentType(ContentType.Application.Json)
+                                                        // Debug: Log the raw request body
+                                                        println("🔍 Key request body: ${keyRequest.body}")
+                                                        
+                                                        // Parse the string body as JSON
+                                                        val body = convertMapToHashMap(keyRequest.body)
+                                                        if (body is Map<*, *>) {
+                                                            @Suppress("UNCHECKED_CAST")
+                                                            val mapBody = body as Map<String, Any>
+                                                            val jsonBody = JsonObject(mapBody.mapValues { anyToJsonElement(it.value) })
+                                                            // Matrix API requires messages wrapper for to-device requests
+                                                            val messagesWrapper = JsonObject(mapOf("messages" to jsonBody))
+                                                            println("🔍 Wrapped request body: $messagesWrapper")
+                                                            setBody(messagesWrapper)
+                                                        } else if (body is String) {
+                                                            val parsedElement = json.parseToJsonElement(body)
+                                                            if (parsedElement is JsonObject) {
+                                                                // Matrix API requires messages wrapper for to-device requests
+                                                                val messagesWrapper = JsonObject(mapOf("messages" to parsedElement))
+                                                                println("🔍 Wrapped parsed body: $messagesWrapper")
+                                                                setBody(messagesWrapper)
+                                                            } else {
+                                                                println("⚠️  Unexpected body format, using empty object")
+                                                                setBody(JsonObject(mapOf("messages" to JsonObject(mapOf()))))
+                                                            }
                                                         } else {
-                                                            setBody(JsonObject(mapOf()))
+                                                            println("⚠️  Unknown body type: ${body?.javaClass?.simpleName}")
+                                                            setBody(JsonObject(mapOf("messages" to JsonObject(mapOf()))))
                                                         }
                                                     }
-                                                }
-                                                if (cancelResponse.status == HttpStatusCode.OK) {
-                                                    println("✅ Key request cancellation sent")
-                                                } else {
-                                                    println("❌ Failed to send key request cancellation: ${cancelResponse.status}")
+                                                    if (keysQueryResponse.status == HttpStatusCode.OK) {
+                                                        println("✅ Room key request sent")
+                                                    } else {
+                                                        println("❌ Failed to send room key request: ${keysQueryResponse.status}")
+                                                        // Log response body for debugging
+                                                        try {
+                                                            val responseBody = keysQueryResponse.body<String>()
+                                                            println("❌ Response body: $responseBody")
+                                                        } catch (e: Exception) {
+                                                            println("❌ Could not read response body: ${e.message}")
+                                                        }
+                                                    }
+                                                } catch (e: Exception) {
+                                                    println("❌ Exception sending key request: ${e.message}")
+                                                    e.printStackTrace()
                                                 }
                                             }
                                             else -> {
-                                                println("⚠️  Unexpected cancellation request type: ${cancellationRequest::class.simpleName}")
+                                                println("⚠️  Unexpected key request type: ${keyRequest::class.simpleName}")
                                             }
                                         }
-                                    }
-                                    
-                                    // Sync again to process any incoming key responses
-                                    println("🔄 Syncing again after key request...")
-                                    syncAndProcessToDevice(10000UL) // Reduced timeout
-                                    
-                                    // Try decryption again with the newly received keys
-                                    try {
-                                        val retryEventJson = json.encodeToString(event)
-                                        val retryDecrypted = machine.decryptRoomEvent(
-                                            roomId = roomId,
-                                            event = retryEventJson,
-                                            decryptionSettings = DecryptionSettings(senderDeviceTrustRequirement = TrustRequirement.UNTRUSTED),
-                                            handleVerificationEvents = false,
-                                            strictShields = false
-                                        )
                                         
-                                        // Parse the retry decrypted content
-                                        val retryDecryptedContent = try {
-                                            json.parseToJsonElement(retryDecrypted.clearEvent)
-                                        } catch (e: Exception) {
-                                            JsonPrimitive(retryDecrypted.clearEvent)
+                                        // Send a cancellation request as well (Matrix protocol requirement)
+                                        val cancellationRequest = keyRequestPair.cancellation
+                                        if (cancellationRequest != null) {
+                                            when (cancellationRequest) {
+                                                is Request.ToDevice -> {
+                                                    println("📤 Sending key request cancellation")
+                                                    val cancelResponse = client.put("$currentHomeserver/_matrix/client/v3/sendToDevice/${cancellationRequest.eventType}/${System.currentTimeMillis()}") {
+                                                        bearerAuth(token)
+                                                        contentType(ContentType.Application.Json)
+                                                        // Parse the string body as JSON
+                                                        val body = convertMapToHashMap(cancellationRequest.body)
+                                                        if (body is Map<*, *>) {
+                                                            @Suppress("UNCHECKED_CAST")
+                                                            val mapBody = body as Map<String, Any>
+                                                            setBody(JsonObject(mapBody.mapValues { anyToJsonElement(it.value) }))
+                                                        } else if (body is String) {
+                                                            val parsedElement = json.parseToJsonElement(body)
+                                                            if (parsedElement is JsonObject) {
+                                                                setBody(parsedElement)
+                                                            } else {
+                                                                setBody(JsonObject(mapOf()))
+                                                            }
+                                                        }
+                                                    }
+                                                    if (cancelResponse.status == HttpStatusCode.OK) {
+                                                        println("✅ Key request cancellation sent")
+                                                    } else {
+                                                        println("❌ Failed to send key request cancellation: ${cancelResponse.status}")
+                                                    }
+                                                }
+                                                else -> {
+                                                    println("⚠️  Unexpected cancellation request type: ${cancellationRequest::class.simpleName}")
+                                                }
+                                            }
                                         }
-
-                                        val retryMessageContent = try {
-                                            json.decodeFromString<MessageContent>(json.encodeToString(retryDecryptedContent))
-                                        } catch (e: Exception) {
-                                            MessageContent("m.text", retryDecrypted.clearEvent.trim('"'))
+                                        
+                                        // Sync again to process any incoming key responses
+                                        println("🔄 Syncing again after key request...")
+                                        syncAndProcessToDevice(10000UL) // Reduced timeout
+                                        
+                                        // Try decryption again with the newly received keys
+                                        try {
+                                            val retryEventJson = json.encodeToString(event)
+                                            val retryDecryptionSettings = DecryptionSettings(senderDeviceTrustRequirement = TrustRequirement.UNTRUSTED)
+                                            val retryDecrypted = machine.decryptRoomEvent(
+                                                roomId = roomId,
+                                                event = retryEventJson,
+                                                decryptionSettings = retryDecryptionSettings,
+                                                handleVerificationEvents = false,
+                                                strictShields = false
+                                            )
+                                            
+                                            // If retry succeeds, return the decrypted event
+                                            val retryDecryptedContent = try {
+                                                json.parseToJsonElement(retryDecrypted.clearEvent)
+                                            } catch (e: Exception) {
+                                                JsonPrimitive(retryDecrypted.clearEvent)
+                                            }
+                                            
+                                            val retryMessageContent = try {
+                                                json.decodeFromString<MessageContent>(json.encodeToString(retryDecryptedContent))
+                                            } catch (e: Exception) {
+                                                MessageContent("m.text", retryDecrypted.clearEvent.trim('"'))
+                                            }
+                                            
+                                            val retryFinalContent = if (retryMessageContent.body.isNullOrBlank()) {
+                                                retryMessageContent.copy(body = retryDecrypted.clearEvent.trim('"'))
+                                            } else {
+                                                retryMessageContent
+                                            }
+                                            
+                                            return@map event.copy(
+                                                type = "m.room.message",
+                                                content = json.parseToJsonElement(json.encodeToString(retryFinalContent))
+                                            )
+                                        } catch (retryException: Exception) {
+                                            println("❌ Retry decryption also failed: ${retryException.message}")
+                                            // Fall through to return undecryptable event
                                         }
-
-                                        val retryFinalContent = if (retryMessageContent.body.isNullOrBlank()) {
-                                            retryMessageContent.copy(body = retryDecrypted.clearEvent.trim('"'))
-                                        } else {
-                                            retryMessageContent
-                                        }
-
-                                        event.copy(
-                                            type = "m.room.message",
-                                            content = json.parseToJsonElement(json.encodeToString(retryFinalContent))
-                                        )
-                                    } catch (retryException: Exception) {
-                                        println("❌ Retry decryption also failed: ${retryException.message}")
-                                        // Return the event with an error message
-                                        event.copy(
-                                            type = "m.room.message",
-                                            content = json.parseToJsonElement("""{"msgtype": "m.bad.encrypted", "body": "** Unable to decrypt: ${e.message} **"}""")
-                                        )
+                                    } catch (keyRequestException: Exception) {
+                                        println("❌ Key request failed: ${keyRequestException.message}")
+                                        // Fall through to return undecryptable event
                                     }
-                                } catch (keyRequestException: Exception) {
-                                    println("❌ Key request failed: ${keyRequestException.message}")
-                                    // Return the event with an error message
-                                    event.copy(
-                                        type = "m.room.message",
-                                        content = json.parseToJsonElement("""{"msgtype": "m.bad.encrypted", "body": "** Unable to decrypt: ${e.message} **"}""")
-                                    )
                                 }
-                            } else {
-                                // Return the event with an error message for other decryption failures
-                                event.copy(
-                                    type = "m.room.message",
-                                    content = json.parseToJsonElement("""{"msgtype": "m.bad.encrypted", "body": "** Unable to decrypt: ${e.message} **"}""")
-                                )
+                                else -> {
+                                    println("❌ Other decryption error: ${e.message}")
+                                }
                             }
+                            
+                            // Return the event as-is with a bad encrypted marker for any decryption failure
+                            return@map event.copy(
+                                type = "m.room.message",
+                                content = json.parseToJsonElement("""{"msgtype": "m.bad.encrypted", "body": "** Unable to decrypt: ${e.message} **"}""")
+                            )
                         }
                     } else {
                         // Not an encrypted event, return as-is
@@ -751,10 +795,35 @@ suspend fun sendMessage(roomId: String, message: String): Boolean {
                     println("✅ Message encrypted successfully")
                 } catch (encryptError: Exception) {
                     println("❌ Message encryption failed: ${encryptError.message}")
-                    // Fallback to plain text
-                    val requestBody = SendMessageRequest(body = message)
-                    finalContent = json.encodeToString(requestBody)
-                    eventType = "m.room.message"
+                    
+                    // Handle session expiration specifically
+                    if (encryptError.message?.contains("Session expired") == true || encryptError.message?.contains("panicked") == true) {
+                        println("⚠️  Session expired during encryption, attempting to renew...")
+                        try {
+                            // Try to renew the session by ensuring room encryption again
+                            val renewed = ensureRoomEncryption(roomId)
+                            if (renewed) {
+                                // Retry encryption with renewed session
+                                val retryEncryptedContent = machine.encrypt(roomId, "m.room.message", """{"body": "$message", "msgtype": "m.text"}""")
+                                finalContent = json.encodeToString(retryEncryptedContent)
+                                eventType = "m.room.encrypted"
+                                println("✅ Message encrypted successfully after session renewal")
+                            } else {
+                                throw Exception("Failed to renew session")
+                            }
+                        } catch (renewalException: Exception) {
+                            println("❌ Session renewal failed: ${renewalException.message}")
+                            // Fallback to plain text
+                            val requestBody = SendMessageRequest(body = message)
+                            finalContent = json.encodeToString(requestBody)
+                            eventType = "m.room.message"
+                        }
+                    } else {
+                        // Fallback to plain text for other encryption errors
+                        val requestBody = SendMessageRequest(body = message)
+                        finalContent = json.encodeToString(requestBody)
+                        eventType = "m.room.message"
+                    }
                 }
             }
         } else {

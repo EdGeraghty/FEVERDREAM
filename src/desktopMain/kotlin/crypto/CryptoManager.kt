@@ -163,10 +163,17 @@ suspend fun syncAndProcessToDevice(timeout: ULong = 30000UL): Boolean {
                                     if (body is Map<*, *>) {
                                         @Suppress("UNCHECKED_CAST")
                                         val mapBody = body as Map<String, Any>
-                                        setBody(JsonObject(mapBody.mapValues { anyToJsonElement(it.value) }))
+                                        val jsonBody = JsonObject(mapBody.mapValues { anyToJsonElement(it.value) })
+                                        // Matrix API requires messages wrapper for to-device requests
+                                        val messagesWrapper = JsonObject(mapOf("messages" to jsonBody))
+                                        setBody(messagesWrapper)
                                     } else if (body is String) {
                                         val parsedBody = json.parseToJsonElement(body).jsonObject
-                                        setBody(parsedBody)
+                                        // Matrix API requires messages wrapper for to-device requests
+                                        val messagesWrapper = JsonObject(mapOf("messages" to parsedBody))
+                                        setBody(messagesWrapper)
+                                    } else {
+                                        setBody(JsonObject(mapOf("messages" to JsonObject(mapOf()))))
                                     }
                                 }
                                 if (toDeviceResponse.status == HttpStatusCode.OK) {
@@ -465,10 +472,17 @@ suspend fun ensureRoomEncryption(roomId: String): Boolean {
                         if (body is Map<*, *>) {
                             @Suppress("UNCHECKED_CAST")
                             val mapBody = body as Map<String, Any>
-                            setBody(JsonObject(mapBody.mapValues { anyToJsonElement(it.value) }))
+                            val jsonBody = JsonObject(mapBody.mapValues { anyToJsonElement(it.value) })
+                            // Matrix API requires messages wrapper for to-device requests
+                            val messagesWrapper = JsonObject(mapOf("messages" to jsonBody))
+                            setBody(messagesWrapper)
                         } else if (body is String) {
                             val parsedBody = json.parseToJsonElement(body).jsonObject
-                            setBody(parsedBody)
+                            // Matrix API requires messages wrapper for to-device requests
+                            val messagesWrapper = JsonObject(mapOf("messages" to parsedBody))
+                            setBody(messagesWrapper)
+                        } else {
+                            setBody(JsonObject(mapOf("messages" to JsonObject(mapOf()))))
                         }
                     }
                     if (toDeviceResponse.status == HttpStatusCode.OK) {
@@ -626,10 +640,17 @@ suspend fun ensureRoomEncryption(roomId: String): Boolean {
                         if (body is Map<*, *>) {
                             @Suppress("UNCHECKED_CAST")
                             val mapBody = body as Map<String, Any>
-                            setBody(JsonObject(mapBody.mapValues { anyToJsonElement(it.value) }))
+                            val jsonBody = JsonObject(mapBody.mapValues { anyToJsonElement(it.value) })
+                            // Matrix API requires messages wrapper for to-device requests
+                            val messagesWrapper = JsonObject(mapOf("messages" to jsonBody))
+                            setBody(messagesWrapper)
                         } else if (body is String) {
                             val parsedBody = json.parseToJsonElement(body).jsonObject
-                            setBody(parsedBody)
+                            // Matrix API requires messages wrapper for to-device requests
+                            val messagesWrapper = JsonObject(mapOf("messages" to parsedBody))
+                            setBody(messagesWrapper)
+                        } else {
+                            setBody(JsonObject(mapOf("messages" to JsonObject(mapOf()))))
                         }
                     }
                     if (response.status == HttpStatusCode.OK) {
@@ -664,10 +685,17 @@ suspend fun ensureRoomEncryption(roomId: String): Boolean {
                                 if (body is Map<*, *>) {
                                     @Suppress("UNCHECKED_CAST")
                                     val mapBody = body as Map<String, Any>
-                                    setBody(JsonObject(mapBody.mapValues { anyToJsonElement(it.value) }))
+                                    val jsonBody = JsonObject(mapBody.mapValues { anyToJsonElement(it.value) })
+                                    // Matrix API requires messages wrapper for to-device requests
+                                    val messagesWrapper = JsonObject(mapOf("messages" to jsonBody))
+                                    setBody(messagesWrapper)
                                 } else if (body is String) {
                                     val parsedBody = json.parseToJsonElement(body).jsonObject
-                                    setBody(parsedBody)
+                                    // Matrix API requires messages wrapper for to-device requests
+                                    val messagesWrapper = JsonObject(mapOf("messages" to parsedBody))
+                                    setBody(messagesWrapper)
+                                } else {
+                                    setBody(JsonObject(mapOf("messages" to JsonObject(mapOf()))))
                                 }
                             }
                             if (response.status == HttpStatusCode.OK) {
@@ -767,10 +795,17 @@ suspend fun ensureRoomEncryption(roomId: String): Boolean {
                         if (body is Map<*, *>) {
                             @Suppress("UNCHECKED_CAST")
                             val mapBody = body as Map<String, Any>
-                            setBody(JsonObject(mapBody.mapValues { anyToJsonElement(it.value) }))
+                            val jsonBody = JsonObject(mapBody.mapValues { anyToJsonElement(it.value) })
+                            // Matrix API requires messages wrapper for to-device requests
+                            val messagesWrapper = JsonObject(mapOf("messages" to jsonBody))
+                            setBody(messagesWrapper)
                         } else if (body is String) {
                             val parsedBody = json.parseToJsonElement(body).jsonObject
-                            setBody(parsedBody)
+                            // Matrix API requires messages wrapper for to-device requests
+                            val messagesWrapper = JsonObject(mapOf("messages" to parsedBody))
+                            setBody(messagesWrapper)
+                        } else {
+                            setBody(JsonObject(mapOf("messages" to JsonObject(mapOf()))))
                         }
                     }
                     if (response.status == HttpStatusCode.OK) {
@@ -938,6 +973,28 @@ suspend fun hasRoomKey(roomId: String): Boolean {
         machine.encrypt(roomId, "m.room.message", """{"msgtype": "m.text", "body": "test"}""")
         true
     } catch (e: Exception) {
+        // Handle session expiration gracefully instead of letting it panic
+        if (e.message?.contains("Session expired") == true || e.message?.contains("panicked") == true) {
+            println("⚠️  Session expired detected in hasRoomKey, attempting to renew...")
+            // Try to force room key sharing to renew the session
+            try {
+                val roomMembers = getRoomMembers(roomId).filter { it != currentUserId }
+                if (roomMembers.isNotEmpty()) {
+                    val encryptionSettings = EncryptionSettings(
+                        algorithm = EventEncryptionAlgorithm.MEGOLM_V1_AES_SHA2,
+                        rotationPeriod = 604800000UL,
+                        rotationPeriodMsgs = 100UL,
+                        historyVisibility = HistoryVisibility.SHARED,
+                        onlyAllowTrustedDevices = false,
+                        errorOnVerifiedUserProblem = false
+                    )
+                    val forceShareRequests = machine.shareRoomKey(roomId, roomMembers, encryptionSettings)
+                    println("🔄 Attempted to renew session with ${forceShareRequests.size} requests")
+                }
+            } catch (renewalException: Exception) {
+                println("⚠️  Session renewal failed: ${renewalException.message}")
+            }
+        }
         false
     }
 }
