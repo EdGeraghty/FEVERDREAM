@@ -498,15 +498,17 @@ fun ChatScreen(
                                     isSending = true
                                     println("🔄 Set isSending = true")
                                     try {
-                                        // Add timeout protection for ensureRoomEncryption
-                                        val encryptionResult = withTimeout(15000L) { // 15 second timeout
-                                            println("🔐 Calling ensureRoomEncryption...")
-                                            crypto.ensureRoomEncryption(roomId)
+                                        // Quick check: see if we can encrypt without full setup
+                                        val canEncrypt = crypto.canEncryptRoom(roomId)
+                                        if (canEncrypt) {
+                                            println("✅ Can encrypt - room key available")
+                                        } else {
+                                            println("⚠️  Cannot encrypt - need room key")
                                         }
-                                        println("🔐 ensureRoomEncryption returned: $encryptionResult")
-                                        
-                                        if (encryptionResult) {
-                                            println("📤 Calling sendMessage...")
+
+                                        if (canEncrypt) {
+                                            // Skip ensureRoomEncryption if we can already encrypt
+                                            println("📤 Calling sendMessage (skipping encryption setup)...")
                                             val sendResult = sendMessage(roomId, newMessage)
                                             println("📤 sendMessage returned: $sendResult")
                                             
@@ -519,7 +521,30 @@ fun ChatScreen(
                                                 println("❌ Message sending failed")
                                             }
                                         } else {
-                                            println("❌ ensureRoomEncryption failed, not sending message")
+                                            // Only do full encryption setup if needed
+                                            println("🔐 Room key not available, doing full encryption setup...")
+                                            val encryptionResult = withTimeout(15000L) { // 15 second timeout
+                                                println("🔐 Calling ensureRoomEncryption...")
+                                                crypto.ensureRoomEncryption(roomId)
+                                            }
+                                            println("🔐 ensureRoomEncryption returned: $encryptionResult")
+                                            
+                                            if (encryptionResult) {
+                                                println("📤 Calling sendMessage...")
+                                                val sendResult = sendMessage(roomId, newMessage)
+                                                println("📤 sendMessage returned: $sendResult")
+                                                
+                                                if (sendResult) {
+                                                    println("✅ Message sent successfully, clearing newMessage")
+                                                    newMessage = ""
+                                                    // Refresh messages
+                                                    messages = getRoomMessages(roomId)
+                                                } else {
+                                                    println("❌ Message sending failed")
+                                                }
+                                            } else {
+                                                println("❌ ensureRoomEncryption failed, not sending message")
+                                            }
                                         }
                                     } catch (e: TimeoutCancellationException) {
                                         println("❌ ensureRoomEncryption timed out after 15 seconds")

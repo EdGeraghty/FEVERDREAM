@@ -1007,3 +1007,14 @@ suspend fun hasRoomKey(roomId: String): Boolean {
         false
     }
 }
+
+// Public function to check if we can encrypt messages for a room
+fun canEncryptRoom(roomId: String): Boolean {
+    val machine = olmMachine ?: return false
+    return try {
+        machine.encrypt(roomId, "m.room.message", """{"msgtype": "m.text", "body": "test"}""")
+        true
+    } catch (e: Exception) {
+        false
+    }
+}
