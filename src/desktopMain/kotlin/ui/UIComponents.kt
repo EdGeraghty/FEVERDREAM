@@ -377,15 +377,20 @@ fun ChatScreen(
 
     println("📝 ChatScreen state initialized: messages=${messages.size}, newMessage='$newMessage', isLoading=$isLoading, isSending=$isSending")
 
-    // Periodic refresh to check for new messages from cache
+    // Periodic refresh to check for new messages from cache - less aggressive
     LaunchedEffect(roomId) {
         while (true) {
-            val cachedMessages = crypto.roomMessageCache[roomId] ?: emptyList()
-            if (cachedMessages.size != messages.size) {
-                // Messages have changed, refresh from cache + API
-                messages = getRoomMessages(roomId)
+            try {
+                val cachedMessages = crypto.roomMessageCache[roomId] ?: emptyList()
+                if (cachedMessages.size != messages.size && !isSending) {
+                    // Only refresh if we're not currently sending a message
+                    println("🔄 Refreshing messages from cache: ${cachedMessages.size} vs ${messages.size}")
+                    messages = cachedMessages.toList() // Use cached messages directly to avoid API calls
+                }
+            } catch (e: Exception) {
+                println("⚠️  Error during periodic refresh: ${e.message}")
             }
-            kotlinx.coroutines.delay(2000) // Check every 2 seconds
+            kotlinx.coroutines.delay(5000) // Check every 5 seconds instead of 2
         }
     }
 
@@ -491,6 +496,7 @@ fun ChatScreen(
                                 println("📤 Starting send message process...")
                                 scope.launch {
                                     isSending = true
+                                    println("🔄 Set isSending = true")
                                     try {
                                         // Add timeout protection for ensureRoomEncryption
                                         val encryptionResult = withTimeout(15000L) { // 15 second timeout
@@ -505,9 +511,12 @@ fun ChatScreen(
                                             println("📤 sendMessage returned: $sendResult")
                                             
                                             if (sendResult) {
+                                                println("✅ Message sent successfully, clearing newMessage")
                                                 newMessage = ""
                                                 // Refresh messages
                                                 messages = getRoomMessages(roomId)
+                                            } else {
+                                                println("❌ Message sending failed")
                                             }
                                         } else {
                                             println("❌ ensureRoomEncryption failed, not sending message")
