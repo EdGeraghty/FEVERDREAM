@@ -3,7 +3,7 @@ import androidx.compose.ui.window.Window
 import kotlin.system.exitProcess
 import ui.MatrixApp
 import network.closeHttpClient
-import network.olmMachine
+import crypto.olmMachine
 
 fun main() = application {
     Window(onCloseRequest = {

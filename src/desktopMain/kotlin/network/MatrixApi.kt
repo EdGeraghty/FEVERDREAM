@@ -6,6 +6,7 @@ import crypto.roomMessageCache
 import crypto.isRoomEncrypted
 import crypto.hasRoomKey
 import crypto.ensureRoomEncryption
+import crypto.olmMachine
 import io.ktor.client.call.*
 import io.ktor.client.request.*
 import io.ktor.http.*
@@ -29,10 +30,8 @@ import kotlinx.serialization.*
 import kotlinx.serialization.json.Json
 
 
-// Global encryption state
-// NOTE: Now using matrix-sdk-crypto (modern, vodozemac-based encryption)
-// Successfully migrated from deprecated jOlm library to current Matrix encryption standard
-var olmMachine: OlmMachine? = null
+// Track recently requested session keys to avoid duplicate requests
+val recentlyRequestedKeys = mutableSetOf<String>()
 
 // Global state for Matrix client
 var currentAccessToken: String? = null
@@ -499,18 +498,17 @@ suspend fun getRoomMessages(roomId: String): List<Event> {
                 val decryptedMessages = allMessages.map { event ->
                     if (event.type == "m.room.encrypted") {
                         try {
-                            // Check if the event content has the required fields for decryption
-                            val contentObj = event.content as? JsonObject ?: JsonObject(emptyMap())
-                            val hasAlgorithm = contentObj.containsKey("algorithm")
-                            val hasCiphertext = contentObj.containsKey("ciphertext")
-
-                            if (!hasAlgorithm || !hasCiphertext) {
-                                println("⚠️  Encrypted event missing required fields (algorithm or ciphertext), skipping decryption")
-                                // Return the event as-is with a bad encrypted marker
-                                return@map event.copy(
-                                    type = "m.room.message",
-                                    content = json.parseToJsonElement("""{"msgtype": "m.bad.encrypted", "body": "** Unable to decrypt: Malformed encrypted event (missing algorithm or ciphertext) **"}""")
-                                )
+                            // Check if we've already requested this key recently
+                            val keyRequestId = "${roomId}:${event.sender}:${event.event_id}"
+                            if (recentlyRequestedKeys.contains(keyRequestId)) {
+                                println("⚠️  Already requested key for this event recently, skipping duplicate request")
+                                // Fall through to return undecryptable event
+                            } else {
+                                recentlyRequestedKeys.add(keyRequestId)
+                                // Keep only the most recent 100 requests to prevent memory leaks
+                                if (recentlyRequestedKeys.size > 100) {
+                                    recentlyRequestedKeys.clear()
+                                }
                             }
 
                             // Debug: Check if we have the room key
@@ -595,28 +593,33 @@ suspend fun getRoomMessages(roomId: String): List<Event> {
                                             when (cancellationRequest) {
                                                 is Request.ToDevice -> {
                                                     println("📤 Sending key request cancellation for previous request")
-                                                    val cancelResponse = client.put("$currentHomeserver/_matrix/client/v3/sendToDevice/${cancellationRequest.eventType}/${System.currentTimeMillis()}") {
-                                                        bearerAuth(token)
-                                                        contentType(ContentType.Application.Json)
-                                                        // Parse the string body as JSON
-                                                        val body = convertMapToHashMap(cancellationRequest.body)
-                                                        if (body is Map<*, *>) {
-                                                            @Suppress("UNCHECKED_CAST")
-                                                            val mapBody = body as Map<String, Any>
-                                                            setBody(JsonObject(mapBody.mapValues { anyToJsonElement(it.value) }))
-                                                        } else if (body is String) {
-                                                            val parsedElement = json.parseToJsonElement(body)
-                                                            if (parsedElement is JsonObject) {
-                                                                setBody(parsedElement)
-                                                            } else {
-                                                                setBody(JsonObject(mapOf()))
+                                                    try {
+                                                        val cancelResponse = client.put("$currentHomeserver/_matrix/client/v3/sendToDevice/${cancellationRequest.eventType}/${System.currentTimeMillis()}") {
+                                                            bearerAuth(token)
+                                                            contentType(ContentType.Application.Json)
+                                                            // Parse the string body as JSON
+                                                            val body = convertMapToHashMap(cancellationRequest.body)
+                                                            if (body is Map<*, *>) {
+                                                                @Suppress("UNCHECKED_CAST")
+                                                                val mapBody = body as Map<String, Any>
+                                                                setBody(JsonObject(mapBody.mapValues { anyToJsonElement(it.value) }))
+                                                            } else if (body is String) {
+                                                                val parsedElement = json.parseToJsonElement(body)
+                                                                if (parsedElement is JsonObject) {
+                                                                    setBody(parsedElement)
+                                                                } else {
+                                                                    setBody(JsonObject(mapOf()))
+                                                                }
                                                             }
                                                         }
-                                                    }
-                                                    if (cancelResponse.status == HttpStatusCode.OK) {
-                                                        println("✅ Key request cancellation sent")
-                                                    } else {
-                                                        println("❌ Failed to send key request cancellation: ${cancelResponse.status}")
+                                                        if (cancelResponse.status == HttpStatusCode.OK) {
+                                                            println("✅ Key request cancellation sent")
+                                                        } else {
+                                                            // Don't treat cancellation failure as critical - just log it
+                                                            println("⚠️  Key request cancellation failed (status: ${cancelResponse.status}) - continuing with key request")
+                                                        }
+                                                    } catch (cancelException: Exception) {
+                                                        println("⚠️  Key request cancellation exception: ${cancelException.message} - continuing with key request")
                                                     }
                                                 }
                                                 else -> {
@@ -664,7 +667,7 @@ suspend fun getRoomMessages(roomId: String): List<Event> {
                                                         }
                                                     }
                                                     if (keysQueryResponse.status == HttpStatusCode.OK) {
-                                                        println("✅ Room key request sent")
+                                                        println("✅ Room key request sent successfully")
                                                     } else {
                                                         println("❌ Failed to send room key request: ${keysQueryResponse.status}")
                                                         // Log response body for debugging
@@ -674,10 +677,12 @@ suspend fun getRoomMessages(roomId: String): List<Event> {
                                                         } catch (e: Exception) {
                                                             println("❌ Could not read response body: ${e.message}")
                                                         }
+                                                        // Don't throw exception here - continue with decryption attempt
                                                     }
                                                 } catch (e: Exception) {
                                                     println("❌ Exception sending key request: ${e.message}")
                                                     e.printStackTrace()
+                                                    // Don't throw exception here - continue with decryption attempt
                                                 }
                                             }
                                             else -> {
@@ -734,7 +739,8 @@ suspend fun getRoomMessages(roomId: String): List<Event> {
                                     }
                                 }
                                 else -> {
-                                    println("❌ Other decryption error: ${e.message}")
+                                    // Default case for other decryption failures
+                                    println("❌ Other decryption failure: ${e.message}")
                                 }
                             }
                             

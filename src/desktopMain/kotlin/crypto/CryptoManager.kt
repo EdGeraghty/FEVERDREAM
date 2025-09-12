@@ -19,6 +19,9 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 
 
+// Global OlmMachine instance for encryption operations
+var olmMachine: OlmMachine? = null
+
 // Message cache for real-time updates
 val roomMessageCache = mutableMapOf<String, MutableList<Event>>()
 
@@ -37,6 +40,16 @@ fun initializeEncryption(userId: String, deviceId: String) {
             println("🔑 Matrix SDK Crypto initialized")
             println("Curve25519 key: ${identityKeys["curve25519"]}")
             println("Ed25519 key: ${identityKeys["ed25519"]}")
+
+            // Debug: Check if we're loading from existing store
+            val existingKeyCounts = olmMachine!!.roomKeyCounts()
+            println("🔑 Existing room key counts on initialization - Total: ${existingKeyCounts.total}, Backed up: ${existingKeyCounts.backedUp}")
+
+            if (existingKeyCounts.total > 0) {
+                println("✅ OlmMachine loaded from existing crypto store with ${existingKeyCounts.total} room keys")
+            } else {
+                println("ℹ️  OlmMachine initialized with fresh crypto store (no existing room keys)")
+            }
         } catch (e: Exception) {
             println("❌ Failed to initialize Matrix SDK Crypto: ${e.message}")
 
@@ -672,6 +685,53 @@ suspend fun ensureRoomEncryption(roomId: String): Boolean {
                     println("⚠️  Unhandled room key request type: ${request::class.simpleName}")
                 }
             }
+        }
+
+        // CRITICAL FIX: Also share room key with ourselves (the sender)
+        // This ensures we have the room key for decryption
+        if (currentUserId != null) {
+            println("🔐 Sharing room key with ourselves (sender)...")
+            val selfRoomKeyRequests = machine.shareRoomKey(roomId, listOf(currentUserId!!), encryptionSettings)
+            println("🔐 Self room key requests: ${selfRoomKeyRequests.size}")
+
+            // Send self room key requests
+            for (request in selfRoomKeyRequests) {
+                when (request) {
+                    is Request.ToDevice -> {
+                        val response = client.put("$currentHomeserver/_matrix/client/v3/sendToDevice/${request.eventType}/${System.currentTimeMillis()}") {
+                            bearerAuth(token)
+                            contentType(ContentType.Application.Json)
+                            // Use the request body directly - OlmMachine already formats it correctly
+                            val body = convertMapToHashMap(request.body)
+                            if (body is Map<*, *>) {
+                                @Suppress("UNCHECKED_CAST")
+                                val mapBody = body as Map<String, Any>
+                                val jsonBody = JsonObject(mapBody.mapValues { anyToJsonElement(it.value) })
+                                // Matrix API requires messages wrapper for to-device requests
+                                val messagesWrapper = JsonObject(mapOf("messages" to jsonBody))
+                                setBody(messagesWrapper)
+                            } else if (body is String) {
+                                val parsedBody = json.parseToJsonElement(body).jsonObject
+                                // Matrix API requires messages wrapper for to-device requests
+                                val messagesWrapper = JsonObject(mapOf("messages" to parsedBody))
+                                setBody(messagesWrapper)
+                            } else {
+                                setBody(JsonObject(mapOf("messages" to JsonObject(mapOf()))))
+                            }
+                        }
+                        if (response.status == HttpStatusCode.OK) {
+                            println("✅ Self room key shared successfully")
+                        } else {
+                            println("❌ Failed to share self room key: ${response.status}")
+                        }
+                    }
+                    else -> {
+                        println("⚠️  Unhandled self room key request type: ${request::class.simpleName}")
+                    }
+                }
+            }
+        } else {
+            println("⚠️  Cannot share room key with self - currentUserId is null")
         }
 
         // If no requests were generated or we need to force sharing (e.g., session expired), try to force sharing anyway
