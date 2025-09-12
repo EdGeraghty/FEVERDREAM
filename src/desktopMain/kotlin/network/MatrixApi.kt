@@ -3,6 +3,7 @@ package network
 import crypto.initializeEncryption
 import crypto.syncAndProcessToDevice
 import crypto.roomMessageCache
+import crypto.isRoomEncrypted
 import io.ktor.client.call.*
 import io.ktor.client.request.*
 import io.ktor.http.*
