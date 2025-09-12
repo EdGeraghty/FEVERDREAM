@@ -158,13 +158,15 @@ suspend fun syncAndProcessToDevice(timeout: ULong = 30000UL): Boolean {
                                 val toDeviceResponse = client.put("$currentHomeserver/_matrix/client/v3/sendToDevice/${request.eventType}/${System.currentTimeMillis()}") {
                                     bearerAuth(token)
                                     contentType(ContentType.Application.Json)
+                                    // Use the request body directly - OlmMachine already formats it correctly
                                     val body = convertMapToHashMap(request.body)
                                     if (body is Map<*, *>) {
                                         @Suppress("UNCHECKED_CAST")
                                         val mapBody = body as Map<String, Any>
                                         setBody(JsonObject(mapBody.mapValues { anyToJsonElement(it.value) }))
                                     } else if (body is String) {
-                                        setBody(json.parseToJsonElement(body))
+                                        val parsedBody = json.parseToJsonElement(body).jsonObject
+                                        setBody(parsedBody)
                                     }
                                 }
                                 if (toDeviceResponse.status == HttpStatusCode.OK) {
@@ -270,6 +272,9 @@ suspend fun syncAndProcessToDevice(timeout: ULong = 30000UL): Boolean {
                                     println("❌ Failed to upload signature: ${signatureUploadResponse.status}")
                                 }
                             }
+                            else -> {
+                                println("⚠️  Unhandled request type: ${request::class.simpleName}")
+                            }
                         }
                     }
                 }
@@ -305,6 +310,8 @@ suspend fun isRoomEncrypted(roomId: String): Boolean {
 suspend fun ensureRoomEncryption(roomId: String): Boolean {
     val token = currentAccessToken ?: return false
     val machine = olmMachine ?: return false
+
+    var forceRoomKeyShare = false
 
     try {
         // Check if room is encrypted
@@ -453,18 +460,15 @@ suspend fun ensureRoomEncryption(roomId: String): Boolean {
                     val toDeviceResponse = client.put("$currentHomeserver/_matrix/client/v3/sendToDevice/${request.eventType}/${System.currentTimeMillis()}") {
                         bearerAuth(token)
                         contentType(ContentType.Application.Json)
+                        // Use the request body directly - OlmMachine already formats it correctly
                         val body = convertMapToHashMap(request.body)
                         if (body is Map<*, *>) {
                             @Suppress("UNCHECKED_CAST")
                             val mapBody = body as Map<String, Any>
-                            // Wrap the body in the "messages" structure as required by Matrix API
-                            val messagesBody = mapOf("messages" to JsonObject(mapBody.mapValues { anyToJsonElement(it.value) }))
-                            setBody(JsonObject(messagesBody))
+                            setBody(JsonObject(mapBody.mapValues { anyToJsonElement(it.value) }))
                         } else if (body is String) {
-                            // Parse the string and wrap it in messages structure
                             val parsedBody = json.parseToJsonElement(body).jsonObject
-                            val messagesBody = mapOf("messages" to parsedBody)
-                            setBody(JsonObject(messagesBody))
+                            setBody(parsedBody)
                         }
                     }
                     if (toDeviceResponse.status == HttpStatusCode.OK) {
@@ -508,6 +512,9 @@ suspend fun ensureRoomEncryption(roomId: String): Boolean {
                     } else {
                         println("❌ Failed to upload signature: ${signatureUploadResponse.status}")
                     }
+                }
+                else -> {
+                    println("⚠️  Unhandled request type: ${request::class.simpleName}")
                 }
             }
         }
@@ -614,18 +621,15 @@ suspend fun ensureRoomEncryption(roomId: String): Boolean {
                     val response = client.put("$currentHomeserver/_matrix/client/v3/sendToDevice/${request.eventType}/${System.currentTimeMillis()}") {
                         bearerAuth(token)
                         contentType(ContentType.Application.Json)
+                        // Use the request body directly - OlmMachine already formats it correctly
                         val body = convertMapToHashMap(request.body)
                         if (body is Map<*, *>) {
                             @Suppress("UNCHECKED_CAST")
                             val mapBody = body as Map<String, Any>
-                            // Wrap the body in the "messages" structure as required by Matrix API
-                            val messagesBody = mapOf("messages" to JsonObject(mapBody.mapValues { anyToJsonElement(it.value) }))
-                            setBody(JsonObject(messagesBody))
+                            setBody(JsonObject(mapBody.mapValues { anyToJsonElement(it.value) }))
                         } else if (body is String) {
-                            // Parse the string and wrap it in messages structure
                             val parsedBody = json.parseToJsonElement(body).jsonObject
-                            val messagesBody = mapOf("messages" to parsedBody)
-                            setBody(JsonObject(messagesBody))
+                            setBody(parsedBody)
                         }
                     }
                     if (response.status == HttpStatusCode.OK) {
@@ -640,9 +644,46 @@ suspend fun ensureRoomEncryption(roomId: String): Boolean {
             }
         }
 
-        // If no requests were generated, the room key might already exist
-        if (roomKeyRequests.isEmpty()) {
-            println("ℹ️  Room key already exists or no sharing needed")
+        // If no requests were generated or we need to force sharing (e.g., session expired), try to force sharing anyway
+        if (roomKeyRequests.isEmpty() || forceRoomKeyShare) {
+            println("ℹ️  No room key requests generated or forcing share (session may have expired), trying to force sharing...")
+            // Try to share with all room members including self to ensure everyone has the key
+            try {
+                val forceShareRequests = machine.shareRoomKey(roomId, allRoomMembers, encryptionSettings)
+                println("🔐 Force share room key requests: ${forceShareRequests.size}")
+
+                // Send force share requests
+                for (request in forceShareRequests) {
+                    when (request) {
+                        is Request.ToDevice -> {
+                            val response = client.put("$currentHomeserver/_matrix/client/v3/sendToDevice/${request.eventType}/${System.currentTimeMillis()}") {
+                                bearerAuth(token)
+                                contentType(ContentType.Application.Json)
+                                // Use the request body directly - OlmMachine already formats it correctly
+                                val body = convertMapToHashMap(request.body)
+                                if (body is Map<*, *>) {
+                                    @Suppress("UNCHECKED_CAST")
+                                    val mapBody = body as Map<String, Any>
+                                    setBody(JsonObject(mapBody.mapValues { anyToJsonElement(it.value) }))
+                                } else if (body is String) {
+                                    val parsedBody = json.parseToJsonElement(body).jsonObject
+                                    setBody(parsedBody)
+                                }
+                            }
+                            if (response.status == HttpStatusCode.OK) {
+                                println("✅ Force room key shared successfully")
+                            } else {
+                                println("❌ Failed to force share room key: ${response.status}")
+                            }
+                        }
+                        else -> {
+                            println("⚠️  Unhandled force share request type: ${request::class.simpleName}")
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                println("⚠️  Force sharing failed: ${e.message}")
+            }
         }
 
         // Step 3: Now try to encrypt a dummy message to ensure we have a valid room key
@@ -688,6 +729,31 @@ suspend fun ensureRoomEncryption(roomId: String): Boolean {
             println("⚠️  Could not check tracked users: ${e.message}")
         }
 
+        // Debug: Check current room key status
+        try {
+            val currentKeyCounts = machine.roomKeyCounts()
+            println("🔑 Current room key status - Total: ${currentKeyCounts.total}, Backed up: ${currentKeyCounts.backedUp}")
+
+            // Check if we can encrypt for this room (indicates we have outbound group session)
+            val canEncrypt = try {
+                machine.encrypt(roomId, "m.room.message", """{"msgtype": "m.text", "body": "test"}""")
+                true
+            } catch (e: Exception) {
+                println("⚠️  Encryption test failed: ${e.message}")
+                false
+            }
+
+            if (canEncrypt) {
+                println("✅ Can encrypt messages for room $roomId (room key available)")
+            } else {
+                println("⚠️  Cannot encrypt messages for room $roomId (no room key or session expired)")
+                // Force room key sharing if we can't encrypt
+                forceRoomKeyShare = true
+            }
+        } catch (e: Exception) {
+            println("⚠️  Could not check room key status: ${e.message}")
+        }
+
         // Process any remaining requests
         val remainingRequests = machine.outgoingRequests()
         for (request in remainingRequests) {
@@ -696,13 +762,15 @@ suspend fun ensureRoomEncryption(roomId: String): Boolean {
                     val response = client.put("$currentHomeserver/_matrix/client/v3/sendToDevice/${request.eventType}/${System.currentTimeMillis()}") {
                         bearerAuth(token)
                         contentType(ContentType.Application.Json)
+                        // Use the request body directly - OlmMachine already formats it correctly
                         val body = convertMapToHashMap(request.body)
                         if (body is Map<*, *>) {
                             @Suppress("UNCHECKED_CAST")
                             val mapBody = body as Map<String, Any>
                             setBody(JsonObject(mapBody.mapValues { anyToJsonElement(it.value) }))
                         } else if (body is String) {
-                            setBody(json.parseToJsonElement(body))
+                            val parsedBody = json.parseToJsonElement(body).jsonObject
+                            setBody(parsedBody)
                         }
                     }
                     if (response.status == HttpStatusCode.OK) {
@@ -794,30 +862,6 @@ suspend fun ensureRoomEncryption(roomId: String): Boolean {
                         println("❌ Failed to claim remaining one-time keys: ${keysClaimResponse.status}")
                     }
                 }
-                is Request.ToDevice -> {
-                    val response = client.put("$currentHomeserver/_matrix/client/v3/sendToDevice/${request.eventType}/${System.currentTimeMillis()}") {
-                        bearerAuth(token)
-                        contentType(ContentType.Application.Json)
-                        val body = convertMapToHashMap(request.body)
-                        if (body is Map<*, *>) {
-                            @Suppress("UNCHECKED_CAST")
-                            val mapBody = body as Map<String, Any>
-                            // Wrap the body in the "messages" structure as required by Matrix API
-                            val messagesBody = mapOf("messages" to JsonObject(mapBody.mapValues { anyToJsonElement(it.value) }))
-                            setBody(JsonObject(messagesBody))
-                        } else if (body is String) {
-                            // Parse the string and wrap it in messages structure
-                            val parsedBody = json.parseToJsonElement(body).jsonObject
-                            val messagesBody = mapOf("messages" to parsedBody)
-                            setBody(JsonObject(messagesBody))
-                        }
-                    }
-                    if (response.status == HttpStatusCode.OK) {
-                        println("✅ Remaining to-device request sent successfully")
-                    } else {
-                        println("❌ Failed to send remaining to-device request: ${response.status}")
-                    }
-                }
                 is Request.KeysBackup -> {
                     // Handle keys backup request
                     println("⚠️  KeysBackup request not implemented")
@@ -883,5 +927,17 @@ suspend fun startPeriodicSync() {
             // Delay longer on error
             kotlinx.coroutines.delay(120000)
         }
+    }
+}
+
+suspend fun hasRoomKey(roomId: String): Boolean {
+    val machine = olmMachine ?: return false
+    return try {
+        // Try to encrypt a dummy message - if this succeeds, we have room keys
+        // If it fails/panics, we don't have the necessary keys
+        machine.encrypt(roomId, "m.room.message", """{"msgtype": "m.text", "body": "test"}""")
+        true
+    } catch (e: Exception) {
+        false
     }
 }
