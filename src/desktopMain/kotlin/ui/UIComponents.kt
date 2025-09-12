@@ -11,6 +11,12 @@ import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowForward
 import androidx.compose.runtime.*
 import androidx.compose.ui.*
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEvent
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.*
@@ -135,6 +141,12 @@ fun LoginScreen(
     var detectedServer by remember { mutableStateOf<String?>(null) }
     var showServerField by remember { mutableStateOf(false) }
 
+    // Focus requesters for tab navigation
+    val usernameFocus = remember { FocusRequester() }
+    val passwordFocus = remember { FocusRequester() }
+    val homeserverFocus = remember { FocusRequester() }
+    val loginButtonFocus = remember { FocusRequester() }
+
     // Auto-detect server from username
     LaunchedEffect(username) {
         if (username.isNotEmpty()) {
@@ -169,7 +181,17 @@ fun LoginScreen(
             onValueChange = { username = it },
             label = { Text("Username") },
             placeholder = { Text("user or user:server.com") },
-            modifier = Modifier.fillMaxWidth(0.5f)
+            modifier = Modifier
+                .fillMaxWidth(0.5f)
+                .focusRequester(usernameFocus)
+                .onKeyEvent { event ->
+                    if (event.key == Key.Tab) {
+                        passwordFocus.requestFocus()
+                        true
+                    } else {
+                        false
+                    }
+                }
         )
         Spacer(modifier = Modifier.height(16.dp))
 
@@ -178,7 +200,21 @@ fun LoginScreen(
             onValueChange = { password = it },
             label = { Text("Password") },
             visualTransformation = PasswordVisualTransformation(),
-            modifier = Modifier.fillMaxWidth(0.5f)
+            modifier = Modifier
+                .fillMaxWidth(0.5f)
+                .focusRequester(passwordFocus)
+                .onKeyEvent { event ->
+                    if (event.key == Key.Tab) {
+                        if (showServerField || detectedServer == null) {
+                            homeserverFocus.requestFocus()
+                        } else {
+                            loginButtonFocus.requestFocus()
+                        }
+                        true
+                    } else {
+                        false
+                    }
+                }
         )
         Spacer(modifier = Modifier.height(16.dp))
 
@@ -208,7 +244,17 @@ fun LoginScreen(
                 onValueChange = { homeserver = it },
                 label = { Text("Homeserver (optional)") },
                 placeholder = { Text("matrix.org or https://your-server.com") },
-                modifier = Modifier.fillMaxWidth(0.5f)
+                modifier = Modifier
+                    .fillMaxWidth(0.5f)
+                    .focusRequester(homeserverFocus)
+                    .onKeyEvent { event ->
+                        if (event.key == Key.Tab) {
+                            loginButtonFocus.requestFocus()
+                            true
+                        } else {
+                            false
+                        }
+                    }
             )
         }
 
@@ -219,7 +265,9 @@ fun LoginScreen(
         } else {
             Button(
                 onClick = { onLogin(username, password, effectiveHomeserver) },
-                modifier = Modifier.fillMaxWidth(0.3f),
+                modifier = Modifier
+                    .fillMaxWidth(0.3f)
+                    .focusRequester(loginButtonFocus),
                 enabled = username.isNotBlank() && password.isNotBlank()
             ) {
                 Text("Login")
