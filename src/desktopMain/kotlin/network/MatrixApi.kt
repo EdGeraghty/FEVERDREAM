@@ -19,6 +19,7 @@ import uniffi.matrix_sdk_crypto.TrustRequirement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.modules.*
 import kotlinx.serialization.*
@@ -505,7 +506,13 @@ suspend fun getRoomMessages(roomId: String): List<Event> {
                             )
 
                             // Parse the decrypted content and merge with original event metadata
-                            val decryptedContent = json.parseToJsonElement(decrypted.clearEvent)
+                            val decryptedContent = try {
+                                json.parseToJsonElement(decrypted.clearEvent)
+                            } catch (e: Exception) {
+                                // If decrypted content is not valid JSON, treat it as plain text
+                                println("⚠️  Decrypted content is not valid JSON: ${decrypted.clearEvent}")
+                                JsonPrimitive(decrypted.clearEvent)
+                            }
 
                             // Try to decode as MessageContent, but handle cases where it might not match
                             val messageContent = try {
@@ -629,7 +636,13 @@ suspend fun getRoomMessages(roomId: String): List<Event> {
                                             strictShields = false
                                         )
 
-                                        val decryptedContent = json.parseToJsonElement(decrypted.clearEvent)
+                                        val decryptedContent = try {
+                                            json.parseToJsonElement(decrypted.clearEvent)
+                                        } catch (e: Exception) {
+                                            // If decrypted content is not valid JSON, treat it as plain text
+                                            println("⚠️  Retry decrypted content is not valid JSON: ${decrypted.clearEvent}")
+                                            JsonPrimitive(decrypted.clearEvent)
+                                        }
                                         val messageContent = try {
                                             json.decodeFromString<MessageContent>(json.encodeToString(decryptedContent))
                                         } catch (e: Exception) {
