@@ -146,8 +146,7 @@ fun LoginScreen(
 
     val effectiveHomeserver = when {
         homeserver.isNotBlank() -> homeserver
-        detectedServer != null -> detectedServer!!
-        else -> "matrix.org"
+        else -> ""  // Don't auto-fill from detected server, let login() handle discovery
     }
 
     Column(

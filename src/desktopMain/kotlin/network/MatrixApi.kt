@@ -293,13 +293,13 @@ suspend fun login(username: String, password: String, homeserver: String): Login
             } else {
                 ""
             }
-            if (actualHomeserver != originalDomainHomeserver && homeserver.isBlank()) {
+            if (homeserver.isBlank() && actualHomeserver != originalDomainHomeserver) {
                 println("Not attempting fallback since homeserver was auto-discovered and user didn't specify one")
                 throw e
             }
 
-            // If the extracted homeserver fails and it's different from the provided one, try the provided homeserver
-            if (actualHomeserver != cleanHomeserver && cleanHomeserver.isNotBlank() && cleanHomeserver != "https://") {
+            // Only try fallback if user explicitly provided a different homeserver
+            if (homeserver.isNotBlank() && actualHomeserver != cleanHomeserver) {
                 println("Login failed on discovered homeserver $actualHomeserver, trying provided homeserver: $cleanHomeserver")
                 currentHomeserver = cleanHomeserver
 
@@ -313,24 +313,46 @@ suspend fun login(username: String, password: String, homeserver: String): Login
                     setBody(json.encodeToString(fallbackRequest))
                 }
 
+                println("📥 Fallback login response: ${fallbackResponse.status}")
+
                 if (fallbackResponse.status == HttpStatusCode.OK) {
-                    val loginResponse = fallbackResponse.body<LoginResponse>()
-                    currentAccessToken = loginResponse.access_token
-                    currentDeviceId = loginResponse.device_id
-                    currentUserId = loginResponse.user_id
-                    println("🔑 Logged in with device ID: ${currentDeviceId}")
-                    // Initialize encryption system after successful login
-                    initializeEncryption(loginResponse.user_id, loginResponse.device_id)
-                    // Save session data
-                    val sessionData = SessionData(
-                        userId = loginResponse.user_id,
-                        deviceId = loginResponse.device_id,
-                        accessToken = loginResponse.access_token,
-                        homeserver = cleanHomeserver,
-                        syncToken = currentSyncToken
-                    )
-                    saveSession(sessionData)
-                    return loginResponse
+                    try {
+                        val loginResponse = fallbackResponse.body<LoginResponse>()
+                        currentAccessToken = loginResponse.access_token
+                        currentDeviceId = loginResponse.device_id
+                        currentUserId = loginResponse.user_id
+                        println("🔑 Logged in with device ID: ${currentDeviceId}")
+                        // Initialize encryption system after successful login
+                        initializeEncryption(loginResponse.user_id, loginResponse.device_id)
+                        // Save session data
+                        val sessionData = SessionData(
+                            userId = loginResponse.user_id,
+                            deviceId = loginResponse.device_id,
+                            accessToken = loginResponse.access_token,
+                            homeserver = cleanHomeserver,
+                            syncToken = currentSyncToken
+                        )
+                        saveSession(sessionData)
+                        return loginResponse
+                    } catch (parseException: Exception) {
+                        println("Failed to parse fallback login response as JSON: ${parseException.message}")
+                        // Try to get the raw response for debugging
+                        try {
+                            val rawResponse = fallbackResponse.body<String>()
+                            println("Raw fallback response: $rawResponse")
+                        } catch (rawException: Exception) {
+                            println("Could not read raw fallback response: ${rawException.message}")
+                        }
+                        throw Exception("Fallback homeserver returned invalid response format")
+                    }
+                } else {
+                    // Try to get error details from fallback response
+                    try {
+                        val errorText = fallbackResponse.body<String>()
+                        println("Fallback login error response: $errorText")
+                    } catch (errorException: Exception) {
+                        println("Could not read fallback error response: ${errorException.message}")
+                    }
                 }
             }
             throw e
