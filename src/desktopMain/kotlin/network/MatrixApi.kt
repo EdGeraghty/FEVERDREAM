@@ -2,6 +2,7 @@ package network
 
 import crypto.initializeEncryption
 import crypto.syncAndProcessToDevice
+import crypto.roomMessageCache
 import io.ktor.client.call.*
 import io.ktor.client.request.*
 import io.ktor.http.*
@@ -457,6 +458,10 @@ suspend fun getRoomMembers(roomId: String): List<String> {
 
 suspend fun getRoomMessages(roomId: String): List<Event> {
     val token = currentAccessToken ?: return emptyList()
+    
+    // Get cached messages first
+    val cachedMessages = roomMessageCache[roomId] ?: emptyList()
+    
     try {
         val response = client.get("$currentHomeserver/_matrix/client/v3/rooms/$roomId/messages") {
             bearerAuth(token)
@@ -465,12 +470,18 @@ suspend fun getRoomMessages(roomId: String): List<Event> {
         }
         if (response.status == HttpStatusCode.OK) {
             val messagesResponse = response.body<RoomMessagesResponse>()
-            val messages = messagesResponse.chunk.reversed()
+            val fetchedMessages = messagesResponse.chunk.reversed()
 
-            // Decrypt encrypted messages
+            // Merge cached and fetched messages, avoiding duplicates
+            val allMessages = (cachedMessages + fetchedMessages).distinctBy { it.event_id }
+            
+            // Update cache with merged messages
+            roomMessageCache[roomId] = allMessages.takeLast(100).toMutableList()
+
+            // Decrypt encrypted messages from the merged list
             val machine = olmMachine
             if (machine != null) {
-                val decryptedMessages = messages.map { event ->
+                val decryptedMessages = allMessages.map { event ->
                     if (event.type == "m.room.encrypted") {
                         try {
                             // Always sync before attempting decryption to get latest keys
@@ -664,7 +675,7 @@ suspend fun getRoomMessages(roomId: String): List<Event> {
                 }
                 return decryptedMessages
             } else {
-                return messages
+                return allMessages
             }
         }
     } catch (e: Exception) {

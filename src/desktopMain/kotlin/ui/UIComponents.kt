@@ -17,6 +17,7 @@ import kotlinx.coroutines.*
 import models.*
 import network.*
 import crypto.*
+
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 
@@ -362,9 +363,21 @@ fun ChatScreen(
     var isSending by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
 
+    // Periodic refresh to check for new messages from cache
+    LaunchedEffect(roomId) {
+        while (true) {
+            val cachedMessages = crypto.roomMessageCache[roomId] ?: emptyList()
+            if (cachedMessages.size != messages.size) {
+                // Messages have changed, refresh from cache + API
+                messages = getRoomMessages(roomId)
+            }
+            kotlinx.coroutines.delay(2000) // Check every 2 seconds
+        }
+    }
+
     LaunchedEffect(roomId) {
         scope.launch {
-            // Removed: ensureRoomEncryption call - too slow for UI initialization
+            // ensureRoomEncryption call - too slow for UI initialization
             // Only set up encryption when actually sending a message
             messages = getRoomMessages(roomId)
             isLoading = false

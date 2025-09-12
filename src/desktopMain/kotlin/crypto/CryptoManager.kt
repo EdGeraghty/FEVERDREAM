@@ -18,6 +18,9 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 
 
+// Message cache for real-time updates
+val roomMessageCache = mutableMapOf<String, MutableList<Event>>()
+
 // Initialize Olm encryption
 fun initializeEncryption(userId: String, deviceId: String) {
     if (olmMachine == null) {
@@ -92,6 +95,33 @@ suspend fun syncAndProcessToDevice(timeout: ULong = 30000UL): Boolean {
                 println("📥 Received ${roomEvents.size} encrypted room events")
                 // Note: Processing encrypted events here might trigger key requests
                 // but we don't need to decrypt them in the sync function
+            }
+
+            // Process ALL room timeline events for real-time updates
+            syncResponse.rooms?.join?.forEach { (roomId, joinedRoom) ->
+                val timelineEvents = joinedRoom.timeline?.events ?: emptyList()
+                if (timelineEvents.isNotEmpty()) {
+                    println("📥 Received ${timelineEvents.size} timeline events for room $roomId")
+                    
+                    // Initialize cache for this room if not exists
+                    if (!roomMessageCache.containsKey(roomId)) {
+                        roomMessageCache[roomId] = mutableListOf()
+                    }
+                    
+                    // Add new events to cache (avoiding duplicates by event ID)
+                    val existingEventIds = roomMessageCache[roomId]!!.map { it.event_id }.toSet()
+                    val newEvents = timelineEvents.filter { it.event_id !in existingEventIds }
+                    
+                    if (newEvents.isNotEmpty()) {
+                        roomMessageCache[roomId]!!.addAll(newEvents)
+                        println("✅ Added ${newEvents.size} new events to cache for room $roomId")
+                        
+                        // Keep only the most recent 100 messages per room
+                        if (roomMessageCache[roomId]!!.size > 100) {
+                            roomMessageCache[roomId] = roomMessageCache[roomId]!!.takeLast(100).toMutableList()
+                        }
+                    }
+                }
             }
 
             // Extract to-device events
