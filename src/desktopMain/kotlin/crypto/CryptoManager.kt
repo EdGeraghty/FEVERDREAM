@@ -318,12 +318,22 @@ suspend fun syncAndProcessToDevice(timeout: ULong = 30000UL): Boolean {
 
 suspend fun isRoomEncrypted(roomId: String): Boolean {
     val token = currentAccessToken ?: return false
+    println("🔍 isRoomEncrypted: Checking encryption for room $roomId")
     try {
-        val response = client.get("$currentHomeserver/_matrix/client/v3/rooms/$roomId/state/m.room.encryption") {
-            bearerAuth(token)
+        val response = withTimeout(5000L) { // 5 second timeout
+            println("🌐 isRoomEncrypted: Making HTTP request...")
+            client.get("$currentHomeserver/_matrix/client/v3/rooms/$roomId/state/m.room.encryption") {
+                bearerAuth(token)
+            }
         }
-        return response.status == HttpStatusCode.OK
+        val result = response.status == HttpStatusCode.OK
+        println("✅ isRoomEncrypted: Room $roomId is ${if (result) "encrypted" else "not encrypted"}")
+        return result
+    } catch (e: TimeoutCancellationException) {
+        println("❌ isRoomEncrypted: Request timed out for room $roomId")
+        return false
     } catch (e: Exception) {
+        println("⚠️ isRoomEncrypted: Exception for room $roomId: ${e.message}")
         return false
     }
 }
@@ -333,6 +343,7 @@ suspend fun ensureRoomEncryption(roomId: String): Boolean {
     val machine = olmMachine ?: return false
 
     var forceRoomKeyShare = false
+    var sessionExpiredDetected = false
 
     try {
         // Check if room is encrypted
@@ -435,15 +446,15 @@ suspend fun ensureRoomEncryption(roomId: String): Boolean {
                     }
                     if (keysClaimResponse.status == HttpStatusCode.OK) {
                         println("✅ One-time keys claimed successfully")
-                        
+
                         // Process the claimed keys to establish Olm sessions
                         val keysResponseText = keysClaimResponse.body<String>()
                         val keysJson = json.parseToJsonElement(keysResponseText)
-                        
+
                         // Create events for the claimed keys
                         val events = mutableListOf<String>()
                         val oneTimeKeysJson = keysJson.jsonObject["one_time_keys"]?.jsonObject ?: JsonObject(emptyMap())
-                        
+
                         for ((userDeviceKey, keyData) in oneTimeKeysJson) {
                             // Create a dummy device key update event for each claimed key
                             val event = json.encodeToString(JsonObject(mapOf(
@@ -456,7 +467,7 @@ suspend fun ensureRoomEncryption(roomId: String): Boolean {
                             )))
                             events.add(event)
                         }
-                        
+
                         if (events.isNotEmpty()) {
                             // Process the claimed keys through OlmMachine
                             val deviceChanges = DeviceLists(emptyList(), emptyList())
@@ -469,7 +480,7 @@ suspend fun ensureRoomEncryption(roomId: String): Boolean {
                                 decryptionSettings = DecryptionSettings(senderDeviceTrustRequirement = TrustRequirement.UNTRUSTED)
                             )
                             println("✅ Processed claimed keys: established sessions with ${syncChanges.roomKeyInfos.size} devices")
-                            
+
                             // Add a small delay to allow session establishment to complete
                             kotlinx.coroutines.delay(1000)
                         }
@@ -565,6 +576,100 @@ suspend fun ensureRoomEncryption(roomId: String): Boolean {
             return false
         }
 
+        // CRITICAL: Test for session expiration BEFORE attempting to share keys
+        println("🔍 Testing for session expiration...")
+        var sessionNeedsRenewal = false
+        try {
+            val testEncrypt = machine.encrypt(roomId, "m.room.message", """{"msgtype": "m.text", "body": "session_test"}""")
+            println("✅ Session is valid - can encrypt")
+        } catch (e: Exception) {
+            if (e.message?.contains("Session expired") == true || e.message?.contains("panicked") == true) {
+                println("⚠️  Session expired detected - will force renewal")
+                sessionExpiredDetected = true
+                sessionNeedsRenewal = true
+                forceRoomKeyShare = true
+            } else {
+                println("⚠️  Encryption test failed (not session expiration): ${e.message}")
+            }
+        }
+
+        // If session needs renewal, we need to create a new outbound group session
+        if (sessionNeedsRenewal) {
+            println("🔄 Creating new outbound group session for room $roomId")
+            try {
+                // Create encryption settings for the new session
+                val encryptionSettings = EncryptionSettings(
+                    algorithm = EventEncryptionAlgorithm.MEGOLM_V1_AES_SHA2,
+                    rotationPeriod = 604800000UL,
+                    rotationPeriodMsgs = 100UL,
+                    historyVisibility = HistoryVisibility.SHARED,
+                    onlyAllowTrustedDevices = false,
+                    errorOnVerifiedUserProblem = false
+                )
+
+                // Create a new outbound group session by calling shareRoomKey with empty members first
+                // This should create a new session if none exists or if current is expired
+                val newSessionRequests = machine.shareRoomKey(roomId, emptyList(), encryptionSettings)
+                println("🔄 New session creation requests: ${newSessionRequests.size}")
+
+                // Send the new session creation requests
+                for (request in newSessionRequests) {
+                    when (request) {
+                        is Request.ToDevice -> {
+                            val response = client.put("$currentHomeserver/_matrix/client/v3/sendToDevice/${request.eventType}/${System.currentTimeMillis()}") {
+                                bearerAuth(token)
+                                contentType(ContentType.Application.Json)
+                                val body = convertMapToHashMap(request.body)
+                                if (body is Map<*, *>) {
+                                    @Suppress("UNCHECKED_CAST")
+                                    val mapBody = body as Map<String, Any>
+                                    val jsonBody = JsonObject(mapBody.mapValues { anyToJsonElement(it.value) })
+                                    val messagesWrapper = JsonObject(mapOf("messages" to jsonBody))
+                                    setBody(messagesWrapper)
+                                } else if (body is String) {
+                                    val parsedBody = json.parseToJsonElement(body).jsonObject
+                                    val messagesWrapper = JsonObject(mapOf("messages" to parsedBody))
+                                    setBody(messagesWrapper)
+                                } else {
+                                    setBody(JsonObject(mapOf("messages" to JsonObject(mapOf()))))
+                                }
+                            }
+                            if (response.status == HttpStatusCode.OK) {
+                                println("✅ New outbound session created successfully")
+                            } else {
+                                println("❌ Failed to create new outbound session: ${response.status}")
+                            }
+                        }
+                        else -> {
+                            println("⚠️  Unhandled new session request type: ${request::class.simpleName}")
+                        }
+                    }
+                }
+
+                // Sync immediately to process the new session
+                println("🔄 Syncing to process new outbound session...")
+                try {
+                    withTimeout(3000L) {
+                        syncAndProcessToDevice(2000UL)
+                    }
+                    println("✅ New session sync completed")
+                } catch (e: Exception) {
+                    println("⚠️  New session sync failed: ${e.message}")
+                }
+
+                // Test if the new session works
+                try {
+                    val testNewSession = machine.encrypt(roomId, "m.room.message", """{"msgtype": "m.text", "body": "new_session_test"}""")
+                    println("✅ New outbound session is working")
+                    sessionNeedsRenewal = false // Session renewal successful
+                } catch (e: Exception) {
+                    println("⚠️  New session still not working: ${e.message}")
+                }
+            } catch (e: Exception) {
+                println("⚠️  Failed to create new outbound session: ${e.message}")
+            }
+        }
+
         // Always attempt to share room key with room members to ensure all have access
         val encryptionSettings = EncryptionSettings(
             algorithm = EventEncryptionAlgorithm.MEGOLM_V1_AES_SHA2,
@@ -595,15 +700,15 @@ suspend fun ensureRoomEncryption(roomId: String): Boolean {
                     }
                     if (keysClaimResponse.status == HttpStatusCode.OK) {
                         println("✅ One-time keys claimed for session establishment")
-                        
+
                         // Process the claimed keys to establish Olm sessions
                         val keysResponseText = keysClaimResponse.body<String>()
                         val keysJson = json.parseToJsonElement(keysResponseText)
-                        
+
                         // Create events for the claimed keys
                         val events = mutableListOf<String>()
                         val oneTimeKeysJson = keysJson.jsonObject["one_time_keys"]?.jsonObject ?: JsonObject(emptyMap())
-                        
+
                         for ((userDeviceKey, keyData) in oneTimeKeysJson) {
                             // Create a dummy device key update event for each claimed key
                             val event = json.encodeToString(JsonObject(mapOf(
@@ -616,7 +721,7 @@ suspend fun ensureRoomEncryption(roomId: String): Boolean {
                             )))
                             events.add(event)
                         }
-                        
+
                         if (events.isNotEmpty()) {
                             // Process the claimed keys through OlmMachine
                             val deviceChanges = DeviceLists(emptyList(), emptyList())
@@ -629,7 +734,7 @@ suspend fun ensureRoomEncryption(roomId: String): Boolean {
                                 decryptionSettings = DecryptionSettings(senderDeviceTrustRequirement = TrustRequirement.UNTRUSTED)
                             )
                             println("✅ Processed claimed keys: established sessions with ${syncChanges.roomKeyInfos.size} devices")
-                            
+
                             // Add a small delay to allow session establishment to complete
                             kotlinx.coroutines.delay(1000)
                         }
@@ -730,12 +835,26 @@ suspend fun ensureRoomEncryption(roomId: String): Boolean {
                     }
                 }
             }
+
+            // CRITICAL: Immediately sync to process the room key we just shared with ourselves
+            // This ensures the OlmMachine has the room key before we try to encrypt/decrypt
+            println("🔄 Syncing immediately to process self-shared room key...")
+            try {
+                withTimeout(5000L) { // 5 second timeout for immediate sync
+                    syncAndProcessToDevice(2000UL) // 2 second sync timeout
+                }
+                println("✅ Immediate sync completed - room key should now be available")
+            } catch (e: TimeoutCancellationException) {
+                println("⚠️  Immediate sync timed out, but continuing...")
+            } catch (e: Exception) {
+                println("⚠️  Immediate sync failed: ${e.message}, but continuing...")
+            }
         } else {
             println("⚠️  Cannot share room key with self - currentUserId is null")
         }
 
         // If no requests were generated or we need to force sharing (e.g., session expired), try to force sharing anyway
-        if (roomKeyRequests.isEmpty() || forceRoomKeyShare) {
+        if (roomKeyRequests.isEmpty() || forceRoomKeyShare || sessionExpiredDetected) {
             println("ℹ️  No room key requests generated or forcing share (session may have expired), trying to force sharing...")
             // Try to share with all room members including self to ensure everyone has the key
             try {
@@ -776,6 +895,19 @@ suspend fun ensureRoomEncryption(roomId: String): Boolean {
                         else -> {
                             println("⚠️  Unhandled force share request type: ${request::class.simpleName}")
                         }
+                    }
+                }
+
+                // Additional sync after force sharing
+                if (forceShareRequests.isNotEmpty()) {
+                    println("🔄 Syncing after force sharing...")
+                    try {
+                        withTimeout(3000L) {
+                            syncAndProcessToDevice(2000UL)
+                        }
+                        println("✅ Force sharing sync completed")
+                    } catch (e: Exception) {
+                        println("⚠️  Force sharing sync failed: ${e.message}")
                     }
                 }
             } catch (e: Exception) {
@@ -1037,32 +1169,120 @@ suspend fun startPeriodicSync() {
 suspend fun hasRoomKey(roomId: String): Boolean {
     val machine = olmMachine ?: return false
     return try {
-        // Try to encrypt a dummy message - if this succeeds, we have room keys
-        // If it fails/panics, we don't have the necessary keys
-        machine.encrypt(roomId, "m.room.message", """{"msgtype": "m.text", "body": "test"}""")
+        // First check if we can encrypt (outbound capability)
+        val canEncrypt = try {
+            machine.encrypt(roomId, "m.room.message", """{"msgtype": "m.text", "body": "test"}""")
+            true
+        } catch (e: Exception) {
+            println("⚠️  Cannot encrypt for room $roomId: ${e.message}")
+            false
+        }
+
+        if (!canEncrypt) {
+            return false
+        }
+
+        // Also test if we can decrypt by creating and attempting to decrypt a test message
+        // This ensures we have both outbound and inbound capability
+        val eventId = "\$test:${System.currentTimeMillis()}"
+        val testEventJson = """{
+            "type": "m.room.encrypted",
+            "event_id": "$eventId",
+            "sender": "${currentUserId ?: "@test:example.com"}",
+            "origin_server_ts": ${System.currentTimeMillis()},
+            "room_id": "$roomId",
+            "content": ${machine.encrypt(roomId, "m.room.message", """{"msgtype": "m.text", "body": "test"}""")}
+        }"""
+
+        val decryptionSettings = DecryptionSettings(senderDeviceTrustRequirement = TrustRequirement.UNTRUSTED)
+        val decrypted = machine.decryptRoomEvent(
+            roomId = roomId,
+            event = testEventJson,
+            decryptionSettings = decryptionSettings,
+            handleVerificationEvents = false,
+            strictShields = false
+        )
+
+        // If we can decrypt our own test message, we have full room key capability
+        println("✅ Room key test successful - can encrypt and decrypt")
         true
     } catch (e: Exception) {
         // Handle session expiration gracefully instead of letting it panic
         if (e.message?.contains("Session expired") == true || e.message?.contains("panicked") == true) {
-            println("⚠️  Session expired detected in hasRoomKey, attempting to renew...")
-            // Try to force room key sharing to renew the session
+            println("⚠️  Session expired detected in hasRoomKey, attempting renewal...")
+
+            // Aggressive session renewal - create new outbound group session
             try {
-                val roomMembers = getRoomMembers(roomId).filter { it != currentUserId }
-                if (roomMembers.isNotEmpty()) {
-                    val encryptionSettings = EncryptionSettings(
-                        algorithm = EventEncryptionAlgorithm.MEGOLM_V1_AES_SHA2,
-                        rotationPeriod = 604800000UL,
-                        rotationPeriodMsgs = 100UL,
-                        historyVisibility = HistoryVisibility.SHARED,
-                        onlyAllowTrustedDevices = false,
-                        errorOnVerifiedUserProblem = false
-                    )
-                    val forceShareRequests = machine.shareRoomKey(roomId, roomMembers, encryptionSettings)
-                    println("🔄 Attempted to renew session with ${forceShareRequests.size} requests")
+                val encryptionSettings = EncryptionSettings(
+                    algorithm = EventEncryptionAlgorithm.MEGOLM_V1_AES_SHA2,
+                    rotationPeriod = 604800000UL,
+                    rotationPeriodMsgs = 100UL,
+                    historyVisibility = HistoryVisibility.SHARED,
+                    onlyAllowTrustedDevices = false,
+                    errorOnVerifiedUserProblem = false
+                )
+
+                // Create new outbound session by calling shareRoomKey with empty list
+                val newSessionRequests = machine.shareRoomKey(roomId, emptyList(), encryptionSettings)
+                println("🔄 Attempted new session creation with ${newSessionRequests.size} requests")
+
+                // Send the requests immediately
+                for (request in newSessionRequests) {
+                    when (request) {
+                        is Request.ToDevice -> {
+                            val token = currentAccessToken ?: continue
+                            try {
+                                val response = client.put("$currentHomeserver/_matrix/client/v3/sendToDevice/${request.eventType}/${System.currentTimeMillis()}") {
+                                    bearerAuth(token)
+                                    contentType(ContentType.Application.Json)
+                                    val body = convertMapToHashMap(request.body)
+                                    if (body is Map<*, *>) {
+                                        @Suppress("UNCHECKED_CAST")
+                                        val mapBody = body as Map<String, Any>
+                                        val jsonBody = JsonObject(mapBody.mapValues { anyToJsonElement(it.value) })
+                                        val messagesWrapper = JsonObject(mapOf("messages" to jsonBody))
+                                        setBody(messagesWrapper)
+                                    }
+                                }
+                                if (response.status == HttpStatusCode.OK) {
+                                    println("✅ New session request sent successfully")
+                                }
+                            } catch (sendException: Exception) {
+                                println("⚠️  Failed to send new session request: ${sendException.message}")
+                            }
+                        }
+                        else -> {
+                            println("⚠️  Unhandled new session request type: ${request::class.simpleName}")
+                        }
+                    }
+                }
+
+                // Sync immediately to process the new session
+                if (newSessionRequests.isNotEmpty()) {
+                    try {
+                        withTimeout(3000L) {
+                            syncAndProcessToDevice(2000UL)
+                        }
+                        println("✅ New session sync completed")
+
+                        // Test again after renewal
+                        return try {
+                            machine.encrypt(roomId, "m.room.message", """{"msgtype": "m.text", "body": "test_after_renewal"}""")
+                            println("✅ Session renewal successful")
+                            true
+                        } catch (retryException: Exception) {
+                            println("⚠️  Session renewal failed: ${retryException.message}")
+                            false
+                        }
+                    } catch (syncException: Exception) {
+                        println("⚠️  New session sync failed: ${syncException.message}")
+                    }
                 }
             } catch (renewalException: Exception) {
                 println("⚠️  Session renewal failed: ${renewalException.message}")
             }
+        } else {
+            println("⚠️  Room key test failed: ${e.message}")
         }
         false
     }

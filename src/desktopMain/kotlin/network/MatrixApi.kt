@@ -368,27 +368,43 @@ suspend fun login(username: String, password: String, homeserver: String): Login
 
 suspend fun getJoinedRooms(): List<String> {
     val token = currentAccessToken ?: return emptyList()
+    println("🔍 getJoinedRooms: Starting request to $currentHomeserver")
     try {
-        val response = client.get("$currentHomeserver/_matrix/client/v3/joined_rooms") {
-            bearerAuth(token)
+        val response = withTimeout(10000L) { // 10 second timeout
+            println("🌐 getJoinedRooms: Making HTTP request...")
+            client.get("$currentHomeserver/_matrix/client/v3/joined_rooms") {
+                bearerAuth(token)
+            }
         }
+        println("📥 getJoinedRooms: Response status: ${response.status}")
         if (response.status == HttpStatusCode.OK) {
             val roomsResponse = response.body<JoinedRoomsResponse>()
+            println("✅ getJoinedRooms: Successfully retrieved ${roomsResponse.joined_rooms.size} rooms")
             return roomsResponse.joined_rooms
+        } else {
+            println("❌ getJoinedRooms: Bad response status ${response.status}")
         }
+    } catch (e: TimeoutCancellationException) {
+        println("❌ getJoinedRooms: Request timed out after 10 seconds")
     } catch (e: Exception) {
-        println("Get rooms failed: ${e.message}")
+        println("❌ getJoinedRooms: Exception: ${e.message}")
+        e.printStackTrace()
     }
     return emptyList()
 }
 
 suspend fun getRoomInvites(): List<RoomInvite> {
     val token = currentAccessToken ?: return emptyList()
+    println("🔍 getRoomInvites: Starting request to $currentHomeserver")
     try {
-        val response = client.get("$currentHomeserver/_matrix/client/v3/sync") {
-            bearerAuth(token)
-            parameter("filter", """{"room":{"invite":{"state":{"limit":0},"timeline":{"limit":0}},"leave":{"state":{"limit":0},"timeline":{"limit":0}},"join":{"state":{"limit":0},"timeline":{"limit":0}},"knock":{"state":{"limit":0},"timeline":{"limit":0}},"ban":{"state":{"limit":0},"timeline":{"limit":0}}},"presence":{"limit":0},"account_data":{"limit":0},"receipts":{"limit":0}}""")
+        val response = withTimeout(10000L) { // 10 second timeout
+            println("🌐 getRoomInvites: Making HTTP request...")
+            client.get("$currentHomeserver/_matrix/client/v3/sync") {
+                bearerAuth(token)
+                parameter("filter", """{"room":{"invite":{"state":{"limit":0},"timeline":{"limit":0}},"leave":{"state":{"limit":0},"timeline":{"limit":0}},"join":{"state":{"limit":0},"timeline":{"limit":0}},"knock":{"state":{"limit":0},"timeline":{"limit":0}},"ban":{"state":{"limit":0},"timeline":{"limit":0}}},"presence":{"limit":0},"account_data":{"limit":0},"receipts":{"limit":0}}""")
+            }
         }
+        println("📥 getRoomInvites: Response status: ${response.status}")
         if (response.status == HttpStatusCode.OK) {
             val syncResponse = response.body<SyncResponse>()
             val invites = mutableListOf<RoomInvite>()
@@ -401,10 +417,16 @@ suspend fun getRoomInvites(): List<RoomInvite> {
                 }
             }
 
+            println("✅ getRoomInvites: Successfully retrieved ${invites.size} invites")
             return invites
+        } else {
+            println("❌ getRoomInvites: Bad response status ${response.status}")
         }
+    } catch (e: TimeoutCancellationException) {
+        println("❌ getRoomInvites: Request timed out after 10 seconds")
     } catch (e: Exception) {
-        println("Get room invites failed: ${e.message}")
+        println("❌ getRoomInvites: Exception: ${e.message}")
+        e.printStackTrace()
     }
     return emptyList()
 }
@@ -531,7 +553,29 @@ suspend fun getRoomMessages(roomId: String): List<Event> {
                                 // Handle session expiration panics gracefully
                                 if (e.message?.contains("Session expired") == true || e.message?.contains("panicked") == true) {
                                     println("⚠️  Session expired during decryption, attempting to renew...")
-                                    throw Exception("Session expired - decryption failed")
+
+                                    // Call hasRoomKey to trigger session renewal
+                                    val renewed = hasRoomKey(roomId)
+                                    if (renewed) {
+                                        println("✅ Session renewed, retrying decryption...")
+
+                                        // Retry decryption with renewed session
+                                        try {
+                                            machine.decryptRoomEvent(
+                                                roomId = roomId,
+                                                event = eventJson,
+                                                decryptionSettings = decryptionSettings,
+                                                handleVerificationEvents = false,
+                                                strictShields = false
+                                            )
+                                        } catch (retryException: Exception) {
+                                            println("❌ Retry decryption failed: ${retryException.message}")
+                                            throw Exception("Session expired - decryption failed after renewal")
+                                        }
+                                    } else {
+                                        println("❌ Session renewal failed")
+                                        throw Exception("Session expired - decryption failed")
+                                    }
                                 } else {
                                     throw e
                                 }
@@ -574,6 +618,52 @@ suspend fun getRoomMessages(roomId: String): List<Event> {
                             when {
                                 e.message?.contains("Session expired") == true -> {
                                     println("⚠️  Session expired during decryption")
+
+                                    // Try session renewal one more time
+                                    val renewed = hasRoomKey(roomId)
+                                    if (renewed) {
+                                        println("✅ Session renewed, attempting final decryption...")
+
+                                        // Final attempt at decryption
+                                        try {
+                                            val finalEventJson = json.encodeToString(event)
+                                            val finalDecryptionSettings = DecryptionSettings(senderDeviceTrustRequirement = TrustRequirement.UNTRUSTED)
+                                            val finalDecrypted = machine.decryptRoomEvent(
+                                                roomId = roomId,
+                                                event = finalEventJson,
+                                                decryptionSettings = finalDecryptionSettings,
+                                                handleVerificationEvents = false,
+                                                strictShields = false
+                                            )
+
+                                            // If successful, return the decrypted event
+                                            val finalDecryptedContent = try {
+                                                json.parseToJsonElement(finalDecrypted.clearEvent)
+                                            } catch (e: Exception) {
+                                                JsonPrimitive(finalDecrypted.clearEvent)
+                                            }
+
+                                            val finalMessageContent = try {
+                                                json.decodeFromString<MessageContent>(json.encodeToString(finalDecryptedContent))
+                                            } catch (e: Exception) {
+                                                MessageContent("m.text", finalDecrypted.clearEvent.trim('"'))
+                                            }
+
+                                            val finalContent = if (finalMessageContent.body.isNullOrBlank()) {
+                                                finalMessageContent.copy(body = finalDecrypted.clearEvent.trim('"'))
+                                            } else {
+                                                finalMessageContent
+                                            }
+
+                                            return@map event.copy(
+                                                type = "m.room.message",
+                                                content = json.parseToJsonElement(json.encodeToString(finalContent))
+                                            )
+                                        } catch (finalException: Exception) {
+                                            println("❌ Final decryption attempt failed: ${finalException.message}")
+                                        }
+                                    }
+
                                     // Return event with session expired marker
                                     return@map event.copy(
                                         type = "m.room.message",
@@ -802,22 +892,61 @@ suspend fun sendMessage(roomId: String, message: String, skipEncryptionSetup: Bo
                         println("🔐 Encrypted content: $finalContent")
                     } catch (encryptError: Exception) {
                         println("❌ Message encryption failed: ${encryptError.message}")
-                        
+
                         // Handle session expiration specifically
                         if (encryptError.message?.contains("Session expired") == true || encryptError.message?.contains("panicked") == true) {
                             println("⚠️  Session expired during encryption, attempting to renew...")
+
+                            // Create new outbound group session
                             try {
-                                // Try to renew the session by ensuring room encryption again
-                                val renewed = ensureRoomEncryption(roomId)
-                                if (renewed) {
-                                    // Retry encryption with renewed session
-                                    val retryEncryptedContent = machine.encrypt(roomId, "m.room.message", """{"body": "$message", "msgtype": "m.text"}""")
-                                    finalContent = retryEncryptedContent // Don't double-encode
-                                    eventType = "m.room.encrypted"
-                                    println("✅ Message encrypted successfully after session renewal")
-                                } else {
-                                    throw Exception("Failed to renew session")
+                                // Create new encryption settings for session renewal
+                                val encryptionSettings = EncryptionSettings(
+                                    algorithm = EventEncryptionAlgorithm.MEGOLM_V1_AES_SHA2,
+                                    rotationPeriod = 604800000UL, // 1 week
+                                    rotationPeriodMsgs = 100UL,   // 100 messages
+                                    historyVisibility = HistoryVisibility.SHARED,
+                                    onlyAllowTrustedDevices = false,
+                                    errorOnVerifiedUserProblem = false
+                                )
+
+                                // Create new outbound session by calling shareRoomKey with empty list
+                                val newSessionRequests = machine.shareRoomKey(roomId, emptyList(), encryptionSettings)
+
+                                // Send room key requests
+                                for (request in newSessionRequests) {
+                                    when (request) {
+                                        is Request.ToDevice -> {
+                                            val response = client.put("$currentHomeserver/_matrix/client/v3/sendToDevice/${request.eventType}/${System.currentTimeMillis()}") {
+                                                bearerAuth(currentAccessToken!!)
+                                                contentType(ContentType.Application.Json)
+                                                val body = convertMapToHashMap(request.body)
+                                                if (body is Map<*, *>) {
+                                                    @Suppress("UNCHECKED_CAST")
+                                                    val mapBody = body as Map<String, Any>
+                                                    val jsonBody = JsonObject(mapBody.mapValues { anyToJsonElement(it.value) })
+                                                    val messagesWrapper = JsonObject(mapOf("messages" to jsonBody))
+                                                    setBody(messagesWrapper)
+                                                }
+                                            }
+                                            if (response.status == HttpStatusCode.OK) {
+                                                println("✅ New session created successfully")
+                                            }
+                                        }
+                                        else -> {
+                                            println("⚠️  Unhandled new session request type: ${request::class.simpleName}")
+                                        }
+                                    }
                                 }
+
+                                // Sync immediately to process the new session
+                                println("🔄 Syncing to process new session...")
+                                syncAndProcessToDevice(5000UL)
+
+                                // Retry encryption with renewed session
+                                val retryEncryptedContent = machine.encrypt(roomId, "m.room.message", """{"body": "$message", "msgtype": "m.text"}""")
+                                finalContent = retryEncryptedContent
+                                eventType = "m.room.encrypted"
+                                println("✅ Message encrypted successfully after session renewal")
                             } catch (renewalException: Exception) {
                                 println("❌ Session renewal failed: ${renewalException.message}")
                                 // Fallback to plain text
@@ -844,10 +973,65 @@ suspend fun sendMessage(roomId: String, message: String, skipEncryptionSetup: Bo
                     println("🔐 Encrypted content: $finalContent")
                 } catch (encryptError: Exception) {
                     println("❌ Message encryption failed: ${encryptError.message}")
-                    // Fallback to plain text
-                    val requestBody = SendMessageRequest(body = message)
-                    finalContent = json.encodeToString(requestBody)
-                    eventType = "m.room.message"
+
+                    // Handle session expiration even when skipping setup
+                    if (encryptError.message?.contains("Session expired") == true || encryptError.message?.contains("panicked") == true) {
+                        println("⚠️  Session expired during encryption, attempting emergency renewal...")
+
+                        // Emergency session renewal - create new outbound session
+                        try {
+                            val encryptionSettings = EncryptionSettings(
+                                algorithm = EventEncryptionAlgorithm.MEGOLM_V1_AES_SHA2,
+                                rotationPeriod = 604800000UL,
+                                rotationPeriodMsgs = 100UL,
+                                historyVisibility = HistoryVisibility.SHARED,
+                                onlyAllowTrustedDevices = false,
+                                errorOnVerifiedUserProblem = false
+                            )
+
+                            // Create new outbound session
+                            val emergencyRequests = machine.shareRoomKey(roomId, emptyList(), encryptionSettings)
+
+                            for (request in emergencyRequests) {
+                                when (request) {
+                                    is Request.ToDevice -> {
+                                        val response = client.put("$currentHomeserver/_matrix/client/v3/sendToDevice/${request.eventType}/${System.currentTimeMillis()}") {
+                                            bearerAuth(currentAccessToken!!)
+                                            contentType(ContentType.Application.Json)
+                                            val body = convertMapToHashMap(request.body)
+                                            if (body is Map<*, *>) {
+                                                @Suppress("UNCHECKED_CAST")
+                                                val mapBody = body as Map<String, Any>
+                                                val jsonBody = JsonObject(mapBody.mapValues { anyToJsonElement(it.value) })
+                                                val messagesWrapper = JsonObject(mapOf("messages" to jsonBody))
+                                                setBody(messagesWrapper)
+                                            }
+                                        }
+                                    }
+                                    else -> {
+                                        println("⚠️  Unhandled emergency request type: ${request::class.simpleName}")
+                                    }
+                                }
+                            }
+
+                            // Sync and retry
+                            syncAndProcessToDevice(3000UL)
+                            val emergencyEncryptedContent = machine.encrypt(roomId, "m.room.message", """{"body": "$message", "msgtype": "m.text"}""")
+                            finalContent = emergencyEncryptedContent
+                            eventType = "m.room.encrypted"
+                            println("✅ Emergency encryption successful")
+                        } catch (emergencyException: Exception) {
+                            println("❌ Emergency renewal failed: ${emergencyException.message}")
+                            val requestBody = SendMessageRequest(body = message)
+                            finalContent = json.encodeToString(requestBody)
+                            eventType = "m.room.message"
+                        }
+                    } else {
+                        // Fallback to plain text
+                        val requestBody = SendMessageRequest(body = message)
+                        finalContent = json.encodeToString(requestBody)
+                        eventType = "m.room.message"
+                    }
                 }
             }
         } else {
@@ -862,9 +1046,9 @@ suspend fun sendMessage(roomId: String, message: String, skipEncryptionSetup: Bo
         println("🔑 Access token present: ${currentAccessToken != null}")
         println("📝 Final content: $finalContent")
         println("📝 Content type: ${finalContent::class.simpleName}")
-        
+
         val response = client.put(url) {
-            header("Authorization", "Bearer $currentAccessToken")
+            bearerAuth(currentAccessToken!!)
             contentType(ContentType.Application.Json)
             setBody(finalContent)
         }

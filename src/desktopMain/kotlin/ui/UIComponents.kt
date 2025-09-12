@@ -60,7 +60,9 @@ fun MatrixApp() {
             // Start periodic sync only if not already running
             if (!isPeriodicSyncRunning) {
                 isPeriodicSyncRunning = true
-                appScope.launch { crypto.startPeriodicSync() }
+                // Temporarily disable periodic sync to debug the continuous syncing issue
+                // appScope.launch { crypto.startPeriodicSync() }
+                println("🔄 Periodic sync disabled for debugging")
             }
         }
     }
@@ -295,16 +297,36 @@ fun RoomsScreen(
 
     LaunchedEffect(Unit) {
         scope.launch {
-            rooms = getJoinedRooms()
-            // Load encryption status for each room
-            val encryptionMap = mutableMapOf<String, Boolean>()
-            rooms.forEach { roomId ->
-                val isEncrypted = crypto.isRoomEncrypted(roomId)
-                encryptionMap[roomId] = isEncrypted
+            try {
+                rooms = getJoinedRooms()
+                invites = getRoomInvites()
+                isLoading = false
+
+                // Load encryption status asynchronously in the background
+                // This prevents blocking the UI if the encryption check is slow
+                scope.launch {
+                    try {
+                        val encryptionMap = mutableMapOf<String, Boolean>()
+                        rooms.forEach { roomId ->
+                            try {
+                                val isEncrypted = withTimeout(3000L) { // 3 second timeout per room
+                                    crypto.isRoomEncrypted(roomId)
+                                }
+                                encryptionMap[roomId] = isEncrypted
+                            } catch (e: Exception) {
+                                println("⚠️  Failed to check encryption for room $roomId: ${e.message}")
+                                encryptionMap[roomId] = false // Default to not encrypted
+                            }
+                        }
+                        roomEncryptionStatus = encryptionMap
+                    } catch (e: Exception) {
+                        println("⚠️  Failed to load encryption status: ${e.message}")
+                    }
+                }
+            } catch (e: Exception) {
+                println("❌ Failed to load rooms: ${e.message}")
+                isLoading = false
             }
-            roomEncryptionStatus = encryptionMap
-            invites = getRoomInvites()
-            isLoading = false
         }
     }
 
