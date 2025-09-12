@@ -507,9 +507,9 @@ fun ChatScreen(
                                         }
 
                                         if (canEncrypt) {
-                                            // Skip ensureRoomEncryption if we can already encrypt
+                                            // Skip encryption setup - we've already verified it's available
                                             println("📤 Calling sendMessage (skipping encryption setup)...")
-                                            val sendResult = sendMessage(roomId, newMessage)
+                                            val sendResult = sendMessage(roomId, newMessage, skipEncryptionSetup = true)
                                             println("📤 sendMessage returned: $sendResult")
                                             
                                             if (sendResult) {
