@@ -37,8 +37,11 @@ fun MatrixApp() {
     var isLoading by remember { mutableStateOf(false) }
     var isPeriodicSyncRunning by remember { mutableStateOf(false) }
 
+    println("🎨 MatrixApp composable called, currentScreen: $currentScreen")
+
     // Load session on startup
     LaunchedEffect(Unit) {
+        println("🔄 Loading session on startup...")
         val session = loadSession()
         if (session != null && validateSession(session)) {
             currentUserId = session.userId
@@ -363,6 +366,7 @@ fun ChatScreen(
     roomId: String,
     onBack: () -> Unit
 ) {
+    println("💬 ChatScreen called for room: $roomId")
     // Use GlobalScope for long-running operations to avoid composition cancellation
     val scope = remember { kotlinx.coroutines.GlobalScope }
     var messages by remember { mutableStateOf<List<Event>>(emptyList()) }
@@ -370,6 +374,8 @@ fun ChatScreen(
     var isLoading by remember { mutableStateOf(true) }
     var isSending by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
+
+    println("📝 ChatScreen state initialized: messages=${messages.size}, newMessage='$newMessage', isLoading=$isLoading, isSending=$isSending")
 
     // Periodic refresh to check for new messages from cache
     LaunchedEffect(roomId) {
@@ -480,7 +486,9 @@ fun ChatScreen(
                 } else {
                     Button(
                         onClick = {
+                            println("🔘 Send button clicked, message: '$newMessage'")
                             if (newMessage.isNotBlank()) {
+                                println("📤 Starting send message process...")
                                 scope.launch {
                                     isSending = true
                                     // Ensure encryption is set up before sending message
@@ -492,6 +500,8 @@ fun ChatScreen(
                                     }
                                     isSending = false
                                 }
+                            } else {
+                                println("⚠️  Message is blank, not sending")
                             }
                         }
                     ) {

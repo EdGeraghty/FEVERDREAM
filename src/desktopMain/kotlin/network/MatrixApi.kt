@@ -768,6 +768,7 @@ suspend fun getRoomMessages(roomId: String): List<Event> {
 }
 
 suspend fun sendMessage(roomId: String, message: String): Boolean {
+    println("📤 sendMessage called with roomId: $roomId, message: $message")
     try {
         // Check if room is encrypted
         val isEncrypted = isRoomEncrypted(roomId)
@@ -834,6 +835,9 @@ suspend fun sendMessage(roomId: String, message: String): Boolean {
         }
 
         val url = "$currentHomeserver/_matrix/client/r0/rooms/$roomId/send/$eventType/${System.currentTimeMillis()}"
+        println("🌐 Sending to URL: $url")
+        println("🔑 Access token present: ${currentAccessToken != null}")
+        println("📝 Final content: $finalContent")
         val response = client.put(url) {
             header("Authorization", "Bearer $currentAccessToken")
             contentType(ContentType.Application.Json)
