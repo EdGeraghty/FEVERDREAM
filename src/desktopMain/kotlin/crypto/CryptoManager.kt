@@ -602,14 +602,57 @@ suspend fun ensureRoomEncryption(roomId: String): Boolean {
             println("ℹ️  No missing sessions to establish")
         }
 
-        // Step 2: Create a room key by encrypting a dummy message if we don't have one
+        // Step 2: Share room key with room members FIRST (this creates the Megolm session)
+        println("🔐 Sharing room key with room members...")
+        val roomKeyRequests = machine.shareRoomKey(roomId, roomMembers, encryptionSettings)
+        println("🔐 Room key requests for setup: ${roomKeyRequests.size}")
+
+        // Send room key requests if any
+        for (request in roomKeyRequests) {
+            when (request) {
+                is Request.ToDevice -> {
+                    val response = client.put("$currentHomeserver/_matrix/client/v3/sendToDevice/${request.eventType}/${System.currentTimeMillis()}") {
+                        bearerAuth(token)
+                        contentType(ContentType.Application.Json)
+                        val body = convertMapToHashMap(request.body)
+                        if (body is Map<*, *>) {
+                            @Suppress("UNCHECKED_CAST")
+                            val mapBody = body as Map<String, Any>
+                            // Wrap the body in the "messages" structure as required by Matrix API
+                            val messagesBody = mapOf("messages" to JsonObject(mapBody.mapValues { anyToJsonElement(it.value) }))
+                            setBody(JsonObject(messagesBody))
+                        } else if (body is String) {
+                            // Parse the string and wrap it in messages structure
+                            val parsedBody = json.parseToJsonElement(body).jsonObject
+                            val messagesBody = mapOf("messages" to parsedBody)
+                            setBody(JsonObject(messagesBody))
+                        }
+                    }
+                    if (response.status == HttpStatusCode.OK) {
+                        println("✅ Room key shared successfully")
+                    } else {
+                        println("❌ Failed to share room key: ${response.status}")
+                    }
+                }
+                else -> {
+                    println("⚠️  Unhandled room key request type: ${request::class.simpleName}")
+                }
+            }
+        }
+
+        // If no requests were generated, the room key might already exist
+        if (roomKeyRequests.isEmpty()) {
+            println("ℹ️  Room key already exists or no sharing needed")
+        }
+
+        // Step 3: Now try to encrypt a dummy message to ensure we have a valid room key
         try {
             val dummyContent = """{"body": "dummy", "msgtype": "m.text"}"""
             val encryptedDummy = machine.encrypt(roomId, "m.room.message", dummyContent)
-            println("🔐 Created room key by encrypting dummy message")
+            println("🔐 Room key validated by encrypting dummy message")
         } catch (e: Exception) {
-            println("⚠️  Could not create room key (may already exist): ${e.message}")
-            // Don't return false here - the room key might already exist
+            println("⚠️  Could not validate room key: ${e.message}")
+            // This is not necessarily an error - the room key might be valid
         }
 
         // Debug: Check room key counts
@@ -643,78 +686,6 @@ suspend fun ensureRoomEncryption(roomId: String): Boolean {
             println("👥 Tracked status for room members: $trackedStatus")
         } catch (e: Exception) {
             println("⚠️  Could not check tracked users: ${e.message}")
-        }
-
-        // Step 3: Share the room key with room members
-        val roomKeyRequests = machine.shareRoomKey(roomId, roomMembers, encryptionSettings)
-        println("🔐 Room key requests for setup: ${roomKeyRequests.size}")
-
-        // If no requests generated, try with all members including self to ensure key exists
-        if (roomKeyRequests.isEmpty()) {
-            val allMembersRequests = machine.shareRoomKey(roomId, allRoomMembers, encryptionSettings)
-            println("🔐 All members room key requests: ${allMembersRequests.size}")
-            // Use the all members requests
-            // Send allMembersRequests
-            for (request in allMembersRequests) {
-                when (request) {
-                    is Request.ToDevice -> {
-                        val response = client.put("$currentHomeserver/_matrix/client/v3/sendToDevice/${request.eventType}/${System.currentTimeMillis()}") {
-                            bearerAuth(token)
-                            contentType(ContentType.Application.Json)
-                            val body = convertMapToHashMap(request.body)
-                            if (body is Map<*, *>) {
-                                @Suppress("UNCHECKED_CAST")
-                                val mapBody = body as Map<String, Any>
-                                // Wrap the body in the "messages" structure as required by Matrix API
-                                val messagesBody = mapOf("messages" to JsonObject(mapBody.mapValues { anyToJsonElement(it.value) }))
-                                setBody(JsonObject(messagesBody))
-                            } else if (body is String) {
-                                // Parse the string and wrap it in messages structure
-                                val parsedBody = json.parseToJsonElement(body).jsonObject
-                                val messagesBody = mapOf("messages" to parsedBody)
-                                setBody(JsonObject(messagesBody))
-                            }
-                        }
-                        if (response.status == HttpStatusCode.OK) {
-                            println("✅ Room key shared with all members successfully")
-                        }
-                    }
-                    else -> {
-                        println("⚠️  Unhandled all members request type: ${request::class.simpleName}")
-                    }
-                }
-            }
-        } else {
-            // Send room key requests
-            for (request in roomKeyRequests) {
-                when (request) {
-                    is Request.ToDevice -> {
-                        val response = client.put("$currentHomeserver/_matrix/client/v3/sendToDevice/${request.eventType}/${System.currentTimeMillis()}") {
-                            bearerAuth(token)
-                            contentType(ContentType.Application.Json)
-                            val body = convertMapToHashMap(request.body)
-                            if (body is Map<*, *>) {
-                                @Suppress("UNCHECKED_CAST")
-                                val mapBody = body as Map<String, Any>
-                                // Wrap the body in the "messages" structure as required by Matrix API
-                                val messagesBody = mapOf("messages" to JsonObject(mapBody.mapValues { anyToJsonElement(it.value) }))
-                                setBody(JsonObject(messagesBody))
-                            } else if (body is String) {
-                                // Parse the string and wrap it in messages structure
-                                val parsedBody = json.parseToJsonElement(body).jsonObject
-                                val messagesBody = mapOf("messages" to parsedBody)
-                                setBody(JsonObject(messagesBody))
-                            }
-                        }
-                        if (response.status == HttpStatusCode.OK) {
-                            println("✅ Room key shared successfully")
-                        }
-                    }
-                    else -> {
-                        println("⚠️  Unhandled room key request type: ${request::class.simpleName}")
-                    }
-                }
-            }
         }
 
         // Process any remaining requests

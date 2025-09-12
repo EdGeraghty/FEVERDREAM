@@ -568,7 +568,7 @@ suspend fun getRoomMessages(roomId: String): List<Event> {
                                     when (keyRequest) {
                                         is Request.ToDevice -> {
                                             println("📤 Sending room key request")
-                                            val keysQueryResponse = client.put("$currentHomeserver/_matrix/client/v3/sendToDevice/${keyRequest.eventType}/${System.currentTimeMillis()}") {
+                                            val _keysQueryResponse = client.put("$currentHomeserver/_matrix/client/v3/sendToDevice/${keyRequest.eventType}/${System.currentTimeMillis()}") {
                                                 bearerAuth(token)
                                                 contentType(ContentType.Application.Json)
                                                 val body = keyRequest.body
@@ -587,7 +587,7 @@ suspend fun getRoomMessages(roomId: String): List<Event> {
                                         when (cancellationRequest) {
                                             is Request.ToDevice -> {
                                                 println("📤 Sending key request cancellation")
-                                                val cancelResponse = client.put("$currentHomeserver/_matrix/client/v3/sendToDevice/${cancellationRequest.eventType}/${System.currentTimeMillis()}") {
+                                                val _cancelResponse = client.put("$currentHomeserver/_matrix/client/v3/sendToDevice/${cancellationRequest.eventType}/${System.currentTimeMillis()}") {
                                                     bearerAuth(token)
                                                     contentType(ContentType.Application.Json)
                                                     val body = cancellationRequest.body
@@ -686,16 +686,43 @@ suspend fun getRoomMessages(roomId: String): List<Event> {
 
 suspend fun sendMessage(roomId: String, message: String): Boolean {
     try {
-        val url = "$currentHomeserver/_matrix/client/r0/rooms/$roomId/send/m.room.message/${System.currentTimeMillis()}"
-        val requestBody = SendMessageRequest(body = message)
-        val response = client.post(url) {
+        // Check if room is encrypted
+        val isEncrypted = isRoomEncrypted(roomId)
+        val machine = olmMachine
+
+        val finalContent: String
+        val eventType: String
+
+        if (isEncrypted && machine != null) {
+            // Encrypt the message
+            println("🔐 Encrypting message for room $roomId")
+            val encryptedContent = machine.encrypt(roomId, "m.room.message", """{"body": "$message", "msgtype": "m.text"}""")
+            finalContent = json.encodeToString(encryptedContent)
+            eventType = "m.room.encrypted"
+            println("✅ Message encrypted successfully")
+        } else {
+            // Send as plain text
+            val requestBody = SendMessageRequest(body = message)
+            finalContent = json.encodeToString(requestBody)
+            eventType = "m.room.message"
+        }
+
+        val url = "$currentHomeserver/_matrix/client/r0/rooms/$roomId/send/$eventType/${System.currentTimeMillis()}"
+        val response = client.put(url) {
             header("Authorization", "Bearer $currentAccessToken")
             contentType(ContentType.Application.Json)
-            setBody(json.encodeToString(requestBody))
+            setBody(finalContent)
         }
-        return response.status == HttpStatusCode.OK
+
+        if (response.status == HttpStatusCode.OK) {
+            println("✅ Message sent successfully")
+            return true
+        } else {
+            println("❌ Failed to send message: ${response.status}")
+            return false
+        }
     } catch (e: Exception) {
-        println("Send message failed: ${e.message}")
+        println("❌ Send message failed: ${e.message}")
         return false
     }
 }
