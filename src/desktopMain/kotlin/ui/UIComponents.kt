@@ -238,12 +238,20 @@ fun RoomsScreen(
     // Use GlobalScope for long-running operations
     val scope = remember { kotlinx.coroutines.GlobalScope }
     var rooms by remember { mutableStateOf<List<String>>(emptyList()) }
+    var roomEncryptionStatus by remember { mutableStateOf<Map<String, Boolean>>(emptyMap()) }
     var invites by remember { mutableStateOf<List<RoomInvite>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
 
     LaunchedEffect(Unit) {
         scope.launch {
             rooms = getJoinedRooms()
+            // Load encryption status for each room
+            val encryptionMap = mutableMapOf<String, Boolean>()
+            rooms.forEach { roomId ->
+                val isEncrypted = crypto.isRoomEncrypted(roomId)
+                encryptionMap[roomId] = isEncrypted
+            }
+            roomEncryptionStatus = encryptionMap
             invites = getRoomInvites()
             isLoading = false
         }
@@ -336,7 +344,7 @@ fun RoomsScreen(
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(roomId)
                                 // Show encryption status
-                                val isEncrypted = runBlocking { crypto.isRoomEncrypted(roomId) }
+                                val isEncrypted = roomEncryptionStatus[roomId] ?: false
                                 if (isEncrypted) {
                                     Text("🔒 Encrypted", style = MaterialTheme.typography.caption, color = MaterialTheme.colors.primary)
                                 }
