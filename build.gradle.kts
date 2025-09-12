@@ -20,6 +20,10 @@ kotlin {
                 implementation("io.ktor:ktor-client-apache:2.3.0")
                 implementation("io.ktor:ktor-client-content-negotiation:2.3.0")
                 implementation("io.ktor:ktor-serialization-kotlinx-json:2.3.0")
+                // Add Kotlin reflection for JSON deserialization
+                implementation("org.jetbrains.kotlin:kotlin-reflect:1.9.20")
+                // Add SLF4J logging implementation
+                implementation("org.slf4j:slf4j-simple:2.0.9")
             }
         }
         val desktopMain by getting {

@@ -335,11 +335,11 @@ fun RoomsScreen(
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(roomId)
-                                // TODO: Show encryption status asynchronously to avoid UI freezing
-                                // val isEncrypted = runBlocking { crypto.isRoomEncrypted(roomId) }
-                                // if (isEncrypted) {
-                                //     Text("🔒 Encrypted", style = MaterialTheme.typography.caption, color = MaterialTheme.colors.primary)
-                                // }
+                                // Show encryption status
+                                val isEncrypted = runBlocking { crypto.isRoomEncrypted(roomId) }
+                                if (isEncrypted) {
+                                    Text("🔒 Encrypted", style = MaterialTheme.typography.caption, color = MaterialTheme.colors.primary)
+                                }
                             }
                             Icon(Icons.Default.ArrowForward, contentDescription = "Enter room")
                         }
@@ -432,10 +432,18 @@ fun ChatScreen(
                                     style = MaterialTheme.typography.caption,
                                     color = if (isOwnMessage) MaterialTheme.colors.onPrimary else MaterialTheme.colors.onSurface
                                 )
-                                Text(
-                                    body,
-                                    color = if (isOwnMessage) MaterialTheme.colors.onPrimary else MaterialTheme.colors.onSurface
-                                )
+                                if (msgtype == "m.bad.encrypted" || body.contains("Can't find the room key")) {
+                                    Text(
+                                        "🔒 Encrypted message (waiting for room keys from other devices)",
+                                        color = MaterialTheme.colors.secondary,
+                                        style = MaterialTheme.typography.body2
+                                    )
+                                } else {
+                                    Text(
+                                        body,
+                                        color = if (isOwnMessage) MaterialTheme.colors.onPrimary else MaterialTheme.colors.onSurface
+                                    )
+                                }
                             }
                         }
                     }

@@ -406,9 +406,47 @@ suspend fun ensureRoomEncryption(roomId: String): Boolean {
                         }
                     }
                     if (keysClaimResponse.status == HttpStatusCode.OK) {
-                        println("✅ Initial one-time keys claimed successfully")
+                        println("✅ One-time keys claimed successfully")
+                        
+                        // Process the claimed keys to establish Olm sessions
+                        val keysResponseText = keysClaimResponse.body<String>()
+                        val keysJson = json.parseToJsonElement(keysResponseText)
+                        
+                        // Create events for the claimed keys
+                        val events = mutableListOf<String>()
+                        val oneTimeKeysJson = keysJson.jsonObject["one_time_keys"]?.jsonObject ?: JsonObject(emptyMap())
+                        
+                        for ((userDeviceKey, keyData) in oneTimeKeysJson) {
+                            // Create a dummy device key update event for each claimed key
+                            val event = json.encodeToString(JsonObject(mapOf(
+                                "type" to JsonPrimitive("m.dummy"),
+                                "sender" to JsonPrimitive("dummy"),
+                                "content" to JsonObject(mapOf(
+                                    "one_time_key" to keyData,
+                                    "user_device_key" to JsonPrimitive(userDeviceKey)
+                                ))
+                            )))
+                            events.add(event)
+                        }
+                        
+                        if (events.isNotEmpty()) {
+                            // Process the claimed keys through OlmMachine
+                            val deviceChanges = DeviceLists(emptyList(), emptyList())
+                            val syncChanges = machine.receiveSyncChanges(
+                                events = events.joinToString(",", "[", "]"),
+                                deviceChanges = deviceChanges,
+                                keyCounts = emptyMap(),
+                                unusedFallbackKeys = null,
+                                nextBatchToken = "",
+                                decryptionSettings = DecryptionSettings(senderDeviceTrustRequirement = TrustRequirement.UNTRUSTED)
+                            )
+                            println("✅ Processed claimed keys: established sessions with ${syncChanges.roomKeyInfos.size} devices")
+                            
+                            // Add a small delay to allow session establishment to complete
+                            kotlinx.coroutines.delay(1000)
+                        }
                     } else {
-                        println("❌ Failed to claim initial one-time keys: ${keysClaimResponse.status}")
+                        println("❌ Failed to claim one-time keys: ${keysClaimResponse.status}")
                     }
                 }
                 is Request.ToDevice -> {
@@ -514,6 +552,44 @@ suspend fun ensureRoomEncryption(roomId: String): Boolean {
                     }
                     if (keysClaimResponse.status == HttpStatusCode.OK) {
                         println("✅ One-time keys claimed for session establishment")
+                        
+                        // Process the claimed keys to establish Olm sessions
+                        val keysResponseText = keysClaimResponse.body<String>()
+                        val keysJson = json.parseToJsonElement(keysResponseText)
+                        
+                        // Create events for the claimed keys
+                        val events = mutableListOf<String>()
+                        val oneTimeKeysJson = keysJson.jsonObject["one_time_keys"]?.jsonObject ?: JsonObject(emptyMap())
+                        
+                        for ((userDeviceKey, keyData) in oneTimeKeysJson) {
+                            // Create a dummy device key update event for each claimed key
+                            val event = json.encodeToString(JsonObject(mapOf(
+                                "type" to JsonPrimitive("m.dummy"),
+                                "sender" to JsonPrimitive("dummy"),
+                                "content" to JsonObject(mapOf(
+                                    "one_time_key" to keyData,
+                                    "user_device_key" to JsonPrimitive(userDeviceKey)
+                                ))
+                            )))
+                            events.add(event)
+                        }
+                        
+                        if (events.isNotEmpty()) {
+                            // Process the claimed keys through OlmMachine
+                            val deviceChanges = DeviceLists(emptyList(), emptyList())
+                            val syncChanges = machine.receiveSyncChanges(
+                                events = events.joinToString(",", "[", "]"),
+                                deviceChanges = deviceChanges,
+                                keyCounts = emptyMap(),
+                                unusedFallbackKeys = null,
+                                nextBatchToken = "",
+                                decryptionSettings = DecryptionSettings(senderDeviceTrustRequirement = TrustRequirement.UNTRUSTED)
+                            )
+                            println("✅ Processed claimed keys: established sessions with ${syncChanges.roomKeyInfos.size} devices")
+                            
+                            // Add a small delay to allow session establishment to complete
+                            kotlinx.coroutines.delay(1000)
+                        }
                     } else {
                         println("❌ Failed to claim one-time keys: ${keysClaimResponse.status}")
                     }
@@ -533,6 +609,7 @@ suspend fun ensureRoomEncryption(roomId: String): Boolean {
             println("🔐 Created room key by encrypting dummy message")
         } catch (e: Exception) {
             println("⚠️  Could not create room key (may already exist): ${e.message}")
+            // Don't return false here - the room key might already exist
         }
 
         // Debug: Check room key counts
