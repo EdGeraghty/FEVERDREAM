@@ -4,6 +4,7 @@ import io.ktor.client.call.*
 import io.ktor.client.request.*
 import io.ktor.http.*
 import kotlinx.coroutines.*
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.serialization.json.*
 import network.*
 import network.client
@@ -533,8 +534,16 @@ suspend fun ensureRoomEncryption(roomId: String): Boolean {
             }
         }
 
-        // Sync to get device keys
-        syncAndProcessToDevice(30000UL)
+        // Sync to get device keys with timeout protection
+        try {
+            withTimeout(10000L) { // 10 second timeout for sync
+                syncAndProcessToDevice(5000UL) // 5 second sync timeout
+            }
+        } catch (e: TimeoutCancellationException) {
+            println("⚠️  Sync timed out, continuing with encryption setup...")
+        } catch (e: Exception) {
+            println("⚠️  Sync failed: ${e.message}, continuing with encryption setup...")
+        }
 
         val roomMembers = allRoomMembers.filter { it != currentUserId }
 

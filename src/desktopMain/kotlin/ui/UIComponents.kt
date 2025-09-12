@@ -491,14 +491,36 @@ fun ChatScreen(
                                 println("📤 Starting send message process...")
                                 scope.launch {
                                     isSending = true
-                                    // Ensure encryption is set up before sending message
-                                    crypto.ensureRoomEncryption(roomId)
-                                    if (sendMessage(roomId, newMessage)) {
-                                        newMessage = ""
-                                        // Refresh messages
-                                        messages = getRoomMessages(roomId)
+                                    try {
+                                        // Add timeout protection for ensureRoomEncryption
+                                        val encryptionResult = withTimeout(15000L) { // 15 second timeout
+                                            println("🔐 Calling ensureRoomEncryption...")
+                                            crypto.ensureRoomEncryption(roomId)
+                                        }
+                                        println("🔐 ensureRoomEncryption returned: $encryptionResult")
+                                        
+                                        if (encryptionResult) {
+                                            println("📤 Calling sendMessage...")
+                                            val sendResult = sendMessage(roomId, newMessage)
+                                            println("📤 sendMessage returned: $sendResult")
+                                            
+                                            if (sendResult) {
+                                                newMessage = ""
+                                                // Refresh messages
+                                                messages = getRoomMessages(roomId)
+                                            }
+                                        } else {
+                                            println("❌ ensureRoomEncryption failed, not sending message")
+                                        }
+                                    } catch (e: TimeoutCancellationException) {
+                                        println("❌ ensureRoomEncryption timed out after 15 seconds")
+                                    } catch (e: Exception) {
+                                        println("❌ Error during message sending: ${e.message}")
+                                        e.printStackTrace()
+                                    } finally {
+                                        println("🔄 Resetting isSending to false")
+                                        isSending = false
                                     }
-                                    isSending = false
                                 }
                             } else {
                                 println("⚠️  Message is blank, not sending")
