@@ -485,6 +485,20 @@ suspend fun getRoomMessages(roomId: String): List<Event> {
                 val decryptedMessages = allMessages.map { event ->
                     if (event.type == "m.room.encrypted") {
                         try {
+                            // Check if the event content has the required fields for decryption
+                            val contentObj = event.content as? JsonObject ?: JsonObject(emptyMap())
+                            val hasAlgorithm = contentObj.containsKey("algorithm")
+                            val hasCiphertext = contentObj.containsKey("ciphertext")
+                            
+                            if (!hasAlgorithm || !hasCiphertext) {
+                                println("⚠️  Encrypted event missing required fields (algorithm or ciphertext), skipping decryption")
+                                // Return the event as-is with a bad encrypted marker
+                                return@map event.copy(
+                                    type = "m.room.message",
+                                    content = json.parseToJsonElement("""{"msgtype": "m.bad.encrypted", "body": "** Unable to decrypt: Malformed encrypted event (missing algorithm or ciphertext) **"}""")
+                                )
+                            }
+
                             // Always sync before attempting decryption to get latest keys
                             println("🔄 Syncing before decryption...")
                             val syncResult = syncAndProcessToDevice(30000UL)

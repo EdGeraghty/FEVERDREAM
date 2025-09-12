@@ -46,6 +46,12 @@
 - [x] Handle Missing Room Keys
 	Implemented proper error handling for missing room keys. App now requests keys from other devices and shows appropriate UI messages when keys are unavailable.
 
+- [x] Test Encryption Workflow
+	Application successfully connects to Matrix server, initializes crypto, receives encrypted room events, and properly handles missing room keys by requesting them from other devices. Single-device setup shows expected behavior - encrypted messages cannot be decrypted without key sharing from other devices.
+
+- [x] Fix Malformed Encrypted Events
+	Added validation to check for required fields (algorithm and ciphertext) in encrypted events before attempting decryption. Prevents "missing field `algorithm`" errors from malformed events with empty content.
+
 - [ ] Implement Key Backup (Future Enhancement)
 	Key backup functionality identified but not yet implemented. Would allow devices to backup and restore room keys for cross-device message decryption.
 
