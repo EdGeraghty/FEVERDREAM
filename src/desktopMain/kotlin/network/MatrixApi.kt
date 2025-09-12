@@ -278,8 +278,6 @@ suspend fun login(username: String, password: String, homeserver: String): Login
                             )
                             saveSession(sessionData)
                             return loginResponse
-                       
-                            println("Older login format also failed: ${oldResponse.status}")
                         }
                     } catch (oldException: Exception) {
                         println("Older login format failed: ${oldException.message}")
@@ -591,6 +589,42 @@ suspend fun getRoomMessages(roomId: String): List<Event> {
                                         val eventJsonForKeyRequest = json.encodeToString(event)
                                         val keyRequestPair = machine.requestRoomKey(eventJsonForKeyRequest, roomId)
                                         
+                                        // Send a cancellation request first if it exists (for previous requests)
+                                        val cancellationRequest = keyRequestPair.cancellation
+                                        if (cancellationRequest != null) {
+                                            when (cancellationRequest) {
+                                                is Request.ToDevice -> {
+                                                    println("📤 Sending key request cancellation for previous request")
+                                                    val cancelResponse = client.put("$currentHomeserver/_matrix/client/v3/sendToDevice/${cancellationRequest.eventType}/${System.currentTimeMillis()}") {
+                                                        bearerAuth(token)
+                                                        contentType(ContentType.Application.Json)
+                                                        // Parse the string body as JSON
+                                                        val body = convertMapToHashMap(cancellationRequest.body)
+                                                        if (body is Map<*, *>) {
+                                                            @Suppress("UNCHECKED_CAST")
+                                                            val mapBody = body as Map<String, Any>
+                                                            setBody(JsonObject(mapBody.mapValues { anyToJsonElement(it.value) }))
+                                                        } else if (body is String) {
+                                                            val parsedElement = json.parseToJsonElement(body)
+                                                            if (parsedElement is JsonObject) {
+                                                                setBody(parsedElement)
+                                                            } else {
+                                                                setBody(JsonObject(mapOf()))
+                                                            }
+                                                        }
+                                                    }
+                                                    if (cancelResponse.status == HttpStatusCode.OK) {
+                                                        println("✅ Key request cancellation sent")
+                                                    } else {
+                                                        println("❌ Failed to send key request cancellation: ${cancelResponse.status}")
+                                                    }
+                                                }
+                                                else -> {
+                                                    println("⚠️  Unexpected cancellation request type: ${cancellationRequest::class.simpleName}")
+                                                }
+                                            }
+                                        }
+                                        
                                         // Send the key request
                                         val keyRequest = keyRequestPair.keyRequest
                                         when (keyRequest) {
@@ -648,42 +682,6 @@ suspend fun getRoomMessages(roomId: String): List<Event> {
                                             }
                                             else -> {
                                                 println("⚠️  Unexpected key request type: ${keyRequest::class.simpleName}")
-                                            }
-                                        }
-                                        
-                                        // Send a cancellation request as well (Matrix protocol requirement)
-                                        val cancellationRequest = keyRequestPair.cancellation
-                                        if (cancellationRequest != null) {
-                                            when (cancellationRequest) {
-                                                is Request.ToDevice -> {
-                                                    println("📤 Sending key request cancellation")
-                                                    val cancelResponse = client.put("$currentHomeserver/_matrix/client/v3/sendToDevice/${cancellationRequest.eventType}/${System.currentTimeMillis()}") {
-                                                        bearerAuth(token)
-                                                        contentType(ContentType.Application.Json)
-                                                        // Parse the string body as JSON
-                                                        val body = convertMapToHashMap(cancellationRequest.body)
-                                                        if (body is Map<*, *>) {
-                                                            @Suppress("UNCHECKED_CAST")
-                                                            val mapBody = body as Map<String, Any>
-                                                            setBody(JsonObject(mapBody.mapValues { anyToJsonElement(it.value) }))
-                                                        } else if (body is String) {
-                                                            val parsedElement = json.parseToJsonElement(body)
-                                                            if (parsedElement is JsonObject) {
-                                                                setBody(parsedElement)
-                                                            } else {
-                                                                setBody(JsonObject(mapOf()))
-                                                            }
-                                                        }
-                                                    }
-                                                    if (cancelResponse.status == HttpStatusCode.OK) {
-                                                        println("✅ Key request cancellation sent")
-                                                    } else {
-                                                        println("❌ Failed to send key request cancellation: ${cancelResponse.status}")
-                                                    }
-                                                }
-                                                else -> {
-                                                    println("⚠️  Unexpected cancellation request type: ${cancellationRequest::class.simpleName}")
-                                                }
                                             }
                                         }
                                         
