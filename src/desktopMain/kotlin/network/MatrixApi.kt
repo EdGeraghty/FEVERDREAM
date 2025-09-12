@@ -459,9 +459,11 @@ suspend fun getRoomMembers(roomId: String): List<String> {
 
 suspend fun getRoomMessages(roomId: String): List<Event> {
     val token = currentAccessToken ?: return emptyList()
+    println("🔍 getRoomMessages: Fetching messages for room $roomId")
     
     // Get cached messages first
     val cachedMessages = roomMessageCache[roomId] ?: emptyList()
+    println("📋 getRoomMessages: Found ${cachedMessages.size} cached messages")
     
     try {
         val response = client.get("$currentHomeserver/_matrix/client/v3/rooms/$roomId/messages") {
@@ -472,9 +474,11 @@ suspend fun getRoomMessages(roomId: String): List<Event> {
         if (response.status == HttpStatusCode.OK) {
             val messagesResponse = response.body<RoomMessagesResponse>()
             val fetchedMessages = messagesResponse.chunk.reversed()
+            println("📥 getRoomMessages: Fetched ${fetchedMessages.size} messages from API")
 
             // Merge cached and fetched messages, avoiding duplicates
             val allMessages = (cachedMessages + fetchedMessages).distinctBy { it.event_id }
+            println("🔀 getRoomMessages: Merged to ${allMessages.size} total messages")
             
             // Update cache with merged messages
             roomMessageCache[roomId] = allMessages.takeLast(100).toMutableList()
@@ -482,6 +486,15 @@ suspend fun getRoomMessages(roomId: String): List<Event> {
             // Decrypt encrypted messages from the merged list
             val machine = olmMachine
             if (machine != null) {
+                println("🔐 getRoomMessages: Starting decryption process")
+                
+                // Sync once at the beginning to get latest keys for all messages
+                println("🔄 Syncing once before decryption...")
+                val syncResult = syncAndProcessToDevice(10000UL) // Reduced timeout to 10 seconds
+                if (!syncResult) {
+                    println("⚠️  Sync failed before decryption")
+                }
+
                 val decryptedMessages = allMessages.map { event ->
                     if (event.type == "m.room.encrypted") {
                         try {
@@ -498,16 +511,6 @@ suspend fun getRoomMessages(roomId: String): List<Event> {
                                     content = json.parseToJsonElement("""{"msgtype": "m.bad.encrypted", "body": "** Unable to decrypt: Malformed encrypted event (missing algorithm or ciphertext) **"}""")
                                 )
                             }
-
-                            // Always sync before attempting decryption to get latest keys
-                            println("🔄 Syncing before decryption...")
-                            val syncResult = syncAndProcessToDevice(30000UL)
-                            if (!syncResult) {
-                                println("⚠️  Sync failed before decryption")
-                            }
-
-                            // Add a small delay to allow key processing
-                            kotlinx.coroutines.delay(1000)
 
                             val eventJson = json.encodeToString(event)
                             val decryptionSettings = DecryptionSettings(senderDeviceTrustRequirement = TrustRequirement.UNTRUSTED)
@@ -568,128 +571,92 @@ suspend fun getRoomMessages(roomId: String): List<Event> {
                                             val keysQueryResponse = client.put("$currentHomeserver/_matrix/client/v3/sendToDevice/${keyRequest.eventType}/${System.currentTimeMillis()}") {
                                                 bearerAuth(token)
                                                 contentType(ContentType.Application.Json)
-                                                val body = convertMapToHashMap(keyRequest.body)
-                                                if (body is Map<*, *>) {
-                                                    @Suppress("UNCHECKED_CAST")
-                                                    val mapBody = body as Map<String, Any>
-                                                    // Wrap the body in the "messages" structure as required by Matrix API
-                                                    val messagesBody = mapOf("messages" to JsonObject(mapBody.mapValues { anyToJsonElement(it.value) }))
-                                                    setBody(JsonObject(messagesBody))
-                                                } else if (body is String) {
-                                                    // Parse the string and wrap it in messages structure
-                                                    val parsedBody = json.parseToJsonElement(body)
-                                                    if (parsedBody is JsonObject) {
-                                                        val messagesBody = mapOf("messages" to parsedBody)
-                                                        setBody(JsonObject(messagesBody))
-                                                    } else {
-                                                        setBody(json.parseToJsonElement(body))
-                                                    }
-                                                }
+                                                val body = keyRequest.body
+                                                setBody(body)
                                             }
-                                            if (keysQueryResponse.status == HttpStatusCode.OK) {
-                                                println("✅ Room key request sent")
-                                            }
+                                            println("✅ Room key request sent")
                                         }
                                         else -> {
-                                            println("⚠️  Unexpected request type for key request: ${keyRequest::class.simpleName}")
+                                            println("⚠️  Unexpected key request type: ${keyRequest::class.simpleName}")
                                         }
                                     }
                                     
-                                    // If there's a cancellation request, send it too
-                                    keyRequestPair.cancellation?.let { cancellation ->
-                                        when (cancellation) {
+                                    // Send a cancellation request as well (Matrix protocol requirement)
+                                    val cancellationRequest = keyRequestPair.cancellation
+                                    if (cancellationRequest != null) {
+                                        when (cancellationRequest) {
                                             is Request.ToDevice -> {
                                                 println("📤 Sending key request cancellation")
-                                                val cancelResponse = client.put("$currentHomeserver/_matrix/client/v3/sendToDevice/${cancellation.eventType}/${System.currentTimeMillis()}") {
+                                                val cancelResponse = client.put("$currentHomeserver/_matrix/client/v3/sendToDevice/${cancellationRequest.eventType}/${System.currentTimeMillis()}") {
                                                     bearerAuth(token)
                                                     contentType(ContentType.Application.Json)
-                                                    val body = convertMapToHashMap(cancellation.body)
-                                                    if (body is Map<*, *>) {
-                                                        @Suppress("UNCHECKED_CAST")
-                                                        val mapBody = body as Map<String, Any>
-                                                        // Wrap the body in the "messages" structure as required by Matrix API
-                                                        val messagesBody = mapOf("messages" to JsonObject(mapBody.mapValues { anyToJsonElement(it.value) }))
-                                                        setBody(JsonObject(messagesBody))
-                                                    } else if (body is String) {
-                                                        // Parse the string and wrap it in messages structure
-                                                        val parsedBody = json.parseToJsonElement(body)
-                                                        if (parsedBody is JsonObject) {
-                                                            val messagesBody = mapOf("messages" to parsedBody)
-                                                            setBody(JsonObject(messagesBody))
-                                                        } else {
-                                                            setBody(json.parseToJsonElement(body))
-                                                        }
-                                                    }
+                                                    val body = cancellationRequest.body
+                                                    setBody(body)
                                                 }
-                                                if (cancelResponse.status == HttpStatusCode.OK) {
-                                                    println("✅ Key request cancellation sent")
-                                                }
+                                                println("✅ Key request cancellation sent")
                                             }
                                             else -> {
-                                                println("⚠️  Unexpected request type for cancellation: ${cancellation::class.simpleName}")
+                                                println("⚠️  Unexpected cancellation request type: ${cancellationRequest::class.simpleName}")
                                             }
                                         }
                                     }
-
-                                    // Try one more sync after requesting keys
+                                    
+                                    // Sync again to process any incoming key responses
                                     println("🔄 Syncing again after key request...")
-                                    syncAndProcessToDevice(30000UL)
-
-                                    // Add delay before retrying decryption
-                                    kotlinx.coroutines.delay(2000)
-
-                                    // Try decryption again
+                                    syncAndProcessToDevice(10000UL) // Reduced timeout
+                                    
+                                    // Try decryption again with the newly received keys
                                     try {
-                                        val eventJsonForRetry = json.encodeToString(event)
-                                        val decryptionSettings = DecryptionSettings(senderDeviceTrustRequirement = TrustRequirement.UNTRUSTED)
-                                        val decrypted = machine.decryptRoomEvent(
+                                        val retryEventJson = json.encodeToString(event)
+                                        val retryDecrypted = machine.decryptRoomEvent(
                                             roomId = roomId,
-                                            event = eventJsonForRetry,
-                                            decryptionSettings = decryptionSettings,
+                                            event = retryEventJson,
+                                            decryptionSettings = DecryptionSettings(senderDeviceTrustRequirement = TrustRequirement.UNTRUSTED),
                                             handleVerificationEvents = false,
                                             strictShields = false
                                         )
-
-                                        val decryptedContent = try {
-                                            json.parseToJsonElement(decrypted.clearEvent)
+                                        
+                                        // Parse the retry decrypted content
+                                        val retryDecryptedContent = try {
+                                            json.parseToJsonElement(retryDecrypted.clearEvent)
                                         } catch (e: Exception) {
-                                            // If decrypted content is not valid JSON, treat it as plain text
-                                            println("⚠️  Retry decrypted content is not valid JSON: ${decrypted.clearEvent}")
-                                            JsonPrimitive(decrypted.clearEvent)
-                                        }
-                                        val messageContent = try {
-                                            json.decodeFromString<MessageContent>(json.encodeToString(decryptedContent))
-                                        } catch (e: Exception) {
-                                            MessageContent("m.text", decrypted.clearEvent.trim('"'))
+                                            JsonPrimitive(retryDecrypted.clearEvent)
                                         }
 
-                                        val finalContent = if (messageContent.body.isNullOrBlank()) {
-                                            messageContent.copy(body = decrypted.clearEvent.trim('"'))
+                                        val retryMessageContent = try {
+                                            json.decodeFromString<MessageContent>(json.encodeToString(retryDecryptedContent))
+                                        } catch (e: Exception) {
+                                            MessageContent("m.text", retryDecrypted.clearEvent.trim('"'))
+                                        }
+
+                                        val retryFinalContent = if (retryMessageContent.body.isNullOrBlank()) {
+                                            retryMessageContent.copy(body = retryDecrypted.clearEvent.trim('"'))
                                         } else {
-                                            messageContent
+                                            retryMessageContent
                                         }
 
                                         event.copy(
                                             type = "m.room.message",
-                                            content = json.parseToJsonElement(json.encodeToString(finalContent))
+                                            content = json.parseToJsonElement(json.encodeToString(retryFinalContent))
                                         )
                                     } catch (retryException: Exception) {
                                         println("❌ Retry decryption also failed: ${retryException.message}")
-                                        // Create error message with more details
+                                        // Return the event with an error message
                                         event.copy(
                                             type = "m.room.message",
-                                            content = json.parseToJsonElement("""{"msgtype": "m.bad.encrypted", "body": "** Unable to decrypt: Key not available. Please wait for key sharing or try again later. **"}""")
+                                            content = json.parseToJsonElement("""{"msgtype": "m.bad.encrypted", "body": "** Unable to decrypt: ${e.message} **"}""")
                                         )
                                     }
                                 } catch (keyRequestException: Exception) {
                                     println("❌ Key request failed: ${keyRequestException.message}")
+                                    // Return the event with an error message
                                     event.copy(
                                         type = "m.room.message",
                                         content = json.parseToJsonElement("""{"msgtype": "m.bad.encrypted", "body": "** Unable to decrypt: ${e.message} **"}""")
                                     )
                                 }
                             } else {
-                                // Other decryption error
+                                // Return the event with an error message for other decryption failures
                                 event.copy(
                                     type = "m.room.message",
                                     content = json.parseToJsonElement("""{"msgtype": "m.bad.encrypted", "body": "** Unable to decrypt: ${e.message} **"}""")
@@ -697,18 +664,24 @@ suspend fun getRoomMessages(roomId: String): List<Event> {
                             }
                         }
                     } else {
+                        // Not an encrypted event, return as-is
                         event
                     }
                 }
+                println("🔐 getRoomMessages: Decryption process completed")
                 return decryptedMessages
             } else {
+                println("⚠️ getRoomMessages: No OlmMachine available, returning raw messages")
                 return allMessages
             }
+        } else {
+            println("❌ getRoomMessages: Bad response status ${response.status}")
+            return cachedMessages
         }
     } catch (e: Exception) {
-        println("Get messages failed: ${e.message}")
+        println("❌ getRoomMessages: Exception: ${e.message}")
+        return cachedMessages
     }
-    return emptyList()
 }
 
 suspend fun sendMessage(roomId: String, message: String): Boolean {

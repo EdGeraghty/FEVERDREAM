@@ -385,10 +385,13 @@ fun ChatScreen(
 
     LaunchedEffect(roomId) {
         scope.launch {
+            println("🔄 ChatScreen: Loading messages for room $roomId")
             // ensureRoomEncryption call - too slow for UI initialization
             // Only set up encryption when actually sending a message
             messages = getRoomMessages(roomId)
+            println("✅ ChatScreen: Loaded ${messages.size} messages for room $roomId")
             isLoading = false
+            println("✅ ChatScreen: Loading complete, isLoading = false")
         }
     }
 
