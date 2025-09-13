@@ -57,8 +57,37 @@ fun initializeEncryption(userId: String, deviceId: String) {
                 println("🆕 OlmMachine created with new crypto store")
             }
         } catch (e: Exception) {
-            println("❌ Failed to initialize OlmMachine: ${e.message}")
-            e.printStackTrace()
+            // Check if the error is due to account mismatch (device ID change)
+            if (e.message?.contains("the account in the store doesn't match the account in the constructor") == true) {
+                println("⚠️  Crypto store mismatch detected (device ID changed). Clearing old crypto store and reinitializing...")
+                try {
+                    // Delete the crypto store directory
+                    val cryptoStoreDir = java.io.File(cryptoStorePath)
+                    if (cryptoStoreDir.exists()) {
+                        cryptoStoreDir.deleteRecursively()
+                        println("🗑️  Old crypto store cleared")
+                    }
+                    // Recreate the directory
+                    cryptoStoreDir.mkdirs()
+                    // Retry initialization
+                    olmMachine = OlmMachine(userId, deviceId, cryptoStorePath, null)
+
+                    val identityKeys = olmMachine!!.identityKeys()
+                    println("🔑 Matrix SDK Crypto reinitialized after store reset")
+                    println("Curve25519 key: ${identityKeys["curve25519"]}")
+                    println("Ed25519 key: ${identityKeys["ed25519"]}")
+
+                    val existingKeyCounts = olmMachine!!.roomKeyCounts()
+                    println("🔑 Room key counts after reset - Total: ${existingKeyCounts.total}, Backed up: ${existingKeyCounts.backedUp}")
+                    println("🆕 New crypto store created")
+                } catch (retryException: Exception) {
+                    println("❌ Failed to reinitialize OlmMachine after store reset: ${retryException.message}")
+                    retryException.printStackTrace()
+                }
+            } else {
+                println("❌ Failed to initialize OlmMachine: ${e.message}")
+                e.printStackTrace()
+            }
         }
     } else {
         println("ℹ️  OlmMachine already initialized")

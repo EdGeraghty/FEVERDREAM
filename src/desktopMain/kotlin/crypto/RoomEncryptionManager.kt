@@ -260,7 +260,7 @@ suspend fun ensureRoomEncryption(roomId: String): Boolean {
                 if (toDeviceEvents.isNotEmpty()) {
                     val events = toDeviceEvents.map { it.toString() }
                     val deviceChanges = DeviceLists(emptyList(), emptyList())
-                    val syncChanges = machine.receiveSyncChanges(
+                    machine.receiveSyncChanges(
                         events = events.joinToString(",", "[", "]"),
                         deviceChanges = deviceChanges,
                         keyCounts = emptyMap(),
@@ -280,7 +280,7 @@ suspend fun ensureRoomEncryption(roomId: String): Boolean {
                         deviceId = currentDeviceId ?: "",
                         accessToken = currentAccessToken ?: "",
                         homeserver = currentHomeserver ?: "",
-                        syncToken = currentSyncToken ?: ""
+                        syncToken = currentSyncToken
                     ))
                 }
             }
