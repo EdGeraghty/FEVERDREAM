@@ -31,7 +31,14 @@ import kotlinx.serialization.json.Json
 
 
 // Track recently requested session keys to avoid duplicate requests
-val recentlyRequestedKeys = mutableSetOf<String>()
+// Use session_id + sender_key for better uniqueness and longer tracking
+val recentlyRequestedKeys = mutableMapOf<String, Long>()
+
+// Clean up old requests periodically (older than 5 minutes)
+fun cleanupOldKeyRequests() {
+    val cutoffTime = System.currentTimeMillis() - (5 * 60 * 1000) // 5 minutes ago
+    recentlyRequestedKeys.entries.removeIf { it.value < cutoffTime }
+}
 
 // Global state for Matrix client
 var currentAccessToken: String? = null
@@ -512,25 +519,29 @@ suspend fun getRoomMessages(roomId: String): List<Event> {
                 
                 // Sync once at the beginning to get latest keys for all messages
                 println("🔄 Syncing once before decryption...")
-                val syncResult = syncAndProcessToDevice(10000UL) // Reduced timeout to 10 seconds
-                if (!syncResult) {
-                    println("⚠️  Sync failed before decryption")
+                val initialSyncResult = syncAndProcessToDevice(10000UL) // 10 second timeout
+                if (!initialSyncResult) {
+                    println("⚠️  Initial sync failed - this may affect decryption of recent messages")
+                } else {
+                    println("✅ Initial sync completed successfully")
                 }
 
                 val decryptedMessages = allMessages.map { event ->
                     if (event.type == "m.room.encrypted") {
                         try {
-                            // Check if we've already requested this key recently
+                            // Clean up old requests before checking
+                            cleanupOldKeyRequests()
+
+                            // Check if we've already requested this key recently using session info
                             val keyRequestId = "${roomId}:${event.sender}:${event.event_id}"
-                            if (recentlyRequestedKeys.contains(keyRequestId)) {
-                                println("⚠️  Already requested key for this event recently, skipping duplicate request")
+                            val lastRequestTime = recentlyRequestedKeys[keyRequestId]
+                            val currentTime = System.currentTimeMillis()
+
+                            if (lastRequestTime != null && (currentTime - lastRequestTime) < (30 * 1000)) { // 30 seconds
+                                println("⚠️  Already requested key for this event recently (${(currentTime - lastRequestTime)/1000}s ago), skipping duplicate request")
                                 // Fall through to return undecryptable event
                             } else {
-                                recentlyRequestedKeys.add(keyRequestId)
-                                // Keep only the most recent 100 requests to prevent memory leaks
-                                if (recentlyRequestedKeys.size > 100) {
-                                    recentlyRequestedKeys.clear()
-                                }
+                                recentlyRequestedKeys[keyRequestId] = currentTime
                             }
 
                             // Debug: Check if we have the room key
@@ -539,7 +550,7 @@ suspend fun getRoomMessages(roomId: String): List<Event> {
 
                             val eventJson = json.encodeToString(event)
                             val decryptionSettings = DecryptionSettings(senderDeviceTrustRequirement = TrustRequirement.UNTRUSTED)
-                            
+
                             // Wrap decryption in try-catch to handle session expiration panics
                             val decrypted = try {
                                 machine.decryptRoomEvent(
@@ -558,6 +569,9 @@ suspend fun getRoomMessages(roomId: String): List<Event> {
                                     val renewed = hasRoomKey(roomId)
                                     if (renewed) {
                                         println("✅ Session renewed, retrying decryption...")
+
+                                        // Add small delay to allow renewal to complete
+                                        kotlinx.coroutines.delay(1000)
 
                                         // Retry decryption with renewed session
                                         try {
@@ -780,9 +794,22 @@ suspend fun getRoomMessages(roomId: String): List<Event> {
                                             }
                                         }
 
-                                        // Sync again to process any incoming key responses
-                                        println("🔄 Syncing again after key request...")
-                                        syncAndProcessToDevice(10000UL) // Reduced timeout
+                                        // Sync multiple times with delays to allow key responses to arrive
+                                        println("🔄 Syncing to process incoming key responses...")
+                                        for (i in 1..3) {
+                                            println("🔄 Sync attempt ${i}/3...")
+                                            val syncResult = syncAndProcessToDevice(5000UL) // 5 second timeout per sync
+                                            if (syncResult) {
+                                                println("✅ Sync ${i} successful")
+                                            } else {
+                                                println("⚠️  Sync ${i} failed or no new events")
+                                            }
+
+                                            // Small delay between syncs
+                                            if (i < 3) {
+                                                kotlinx.coroutines.delay(2000)
+                                            }
+                                        }
 
                                         // Try decryption again with the newly received keys
                                         try {
