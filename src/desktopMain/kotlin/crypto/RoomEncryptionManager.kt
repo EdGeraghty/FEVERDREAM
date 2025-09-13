@@ -184,6 +184,112 @@ suspend fun ensureRoomEncryption(roomId: String): Boolean {
             println("⚠️  New session still not working: ${e.message}")
         }
 
+        // CRITICAL FIX: Create and share a new outbound session to ensure we have a fresh Megolm session
+        try {
+            println("🔑 Creating new outbound session for room $roomId")
+            val encryptionSettings = EncryptionSettings(
+                algorithm = EventEncryptionAlgorithm.MEGOLM_V1_AES_SHA2,
+                rotationPeriod = 604800000uL, // 7 days in milliseconds
+                rotationPeriodMsgs = 100uL,
+                historyVisibility = HistoryVisibility.SHARED,
+                onlyAllowTrustedDevices = false,
+                errorOnVerifiedUserProblem = false
+            )
+
+            // Share room key with all room members (including ourselves)
+            val shareRequests = machine.shareRoomKey(roomId, allRoomMembers, encryptionSettings)
+            println("🔑 Generated ${shareRequests.size} room key share requests")
+
+            // Send the room key share requests
+            for (request in shareRequests) {
+                when (request) {
+                    is Request.ToDevice -> {
+                        val toDeviceResponse = client.put("$currentHomeserver/_matrix/client/v3/sendToDevice/${request.eventType}/${System.currentTimeMillis()}") {
+                            bearerAuth(token)
+                            contentType(ContentType.Application.Json)
+                            val body = convertMapToHashMap(request.body)
+                            if (body is Map<*, *>) {
+                                @Suppress("UNCHECKED_CAST")
+                                val mapBody = body as Map<String, Any>
+                                val jsonBody = JsonObject(mapBody.mapValues { anyToJsonElement(it.value) })
+                                val messagesWrapper = JsonObject(mapOf("messages" to jsonBody))
+                                setBody(messagesWrapper)
+                            } else if (body is String) {
+                                val parsedBody = json.parseToJsonElement(body).jsonObject
+                                val messagesWrapper = JsonObject(mapOf("messages" to parsedBody))
+                                setBody(messagesWrapper)
+                            } else {
+                                setBody(JsonObject(mapOf("messages" to JsonObject(mapOf()))))
+                            }
+                        }
+                        if (toDeviceResponse.status == HttpStatusCode.OK) {
+                            println("✅ Room key shared successfully")
+                        } else {
+                            println("❌ Failed to share room key: ${toDeviceResponse.status}")
+                        }
+                    }
+                    else -> {
+                        println("⚠️  Unexpected request type for room key sharing: ${request::class.simpleName}")
+                    }
+                }
+            }
+
+            // Sync once to process any responses
+            println("🔄 Syncing after room key sharing...")
+            val syncResponse = withTimeout(10000L) {
+                client.get("$currentHomeserver/_matrix/client/v3/sync") {
+                    bearerAuth(token)
+                    parameter("since", currentSyncToken)
+                    parameter("timeout", "10000")
+                }
+            }
+
+            if (syncResponse.status == HttpStatusCode.OK) {
+                val syncData = syncResponse.body<String>()
+                val syncJson = json.parseToJsonElement(syncData).jsonObject
+
+                // Process to-device events from sync
+                val toDeviceEvents = syncJson["to_device"]?.jsonObject?.get("events")?.jsonArray ?: JsonArray(emptyList())
+                if (toDeviceEvents.isNotEmpty()) {
+                    val events = toDeviceEvents.map { it.toString() }
+                    val deviceChanges = DeviceLists(emptyList(), emptyList())
+                    val syncChanges = machine.receiveSyncChanges(
+                        events = events.joinToString(",", "[", "]"),
+                        deviceChanges = deviceChanges,
+                        keyCounts = emptyMap(),
+                        unusedFallbackKeys = null,
+                        nextBatchToken = syncJson["next_batch"]?.jsonPrimitive?.content ?: "",
+                        decryptionSettings = DecryptionSettings(senderDeviceTrustRequirement = TrustRequirement.UNTRUSTED)
+                    )
+                    println("✅ Processed ${events.size} to-device events after key sharing")
+                }
+
+                // Update sync token
+                val nextBatch = syncJson["next_batch"]?.jsonPrimitive?.content
+                if (nextBatch != null) {
+                    currentSyncToken = nextBatch
+                    saveSession(SessionData(
+                        userId = currentUserId ?: "",
+                        deviceId = currentDeviceId ?: "",
+                        accessToken = currentAccessToken ?: "",
+                        homeserver = currentHomeserver ?: "",
+                        syncToken = currentSyncToken ?: ""
+                    ))
+                }
+            }
+
+            // Test encryption again after creating new session
+            try {
+                machine.encrypt(roomId, "m.room.message", """{"msgtype": "m.text", "body": "session_test_after_sharing"}""")
+                println("✅ New outbound session created and working")
+            } catch (testException: Exception) {
+                println("⚠️  Session still not working after sharing: ${testException.message}")
+            }
+
+        } catch (shareException: Exception) {
+            println("❌ Failed to create new outbound session: ${shareException.message}")
+        }
+
         println("✅ Room encryption setup completed for $roomId")
         return true
     } catch (e: Exception) {

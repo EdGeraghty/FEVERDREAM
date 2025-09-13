@@ -473,6 +473,26 @@ fun ChatScreen(
             println("✅ ChatScreen: Loaded ${messages.size} messages for room $roomId")
             isLoading = false
             println("✅ ChatScreen: Loading complete, isLoading = false")
+
+            // Proactively ensure encryption is set up for this room
+            // This creates a fresh outbound session so future messages can be encrypted/decrypted
+            scope.launch {
+                try {
+                    println("🔐 Proactively setting up encryption for room $roomId")
+                    val encryptionResult = withTimeout(15000L) { // 15 second timeout
+                        crypto.ensureRoomEncryption(roomId)
+                    }
+                    if (encryptionResult) {
+                        println("✅ Proactive encryption setup successful for room $roomId")
+                    } else {
+                        println("⚠️  Proactive encryption setup failed for room $roomId")
+                    }
+                } catch (e: TimeoutCancellationException) {
+                    println("❌ Proactive encryption setup timed out for room $roomId")
+                } catch (e: Exception) {
+                    println("⚠️  Proactive encryption setup failed: ${e.message}")
+                }
+            }
         }
     }
 
@@ -498,6 +518,36 @@ fun ChatScreen(
                 CircularProgressIndicator()
             }
         } else {
+            // Show info message about encryption state
+            val hasUndecryptableMessages = messages.any { event ->
+                val messageContent = event.content as? JsonObject
+                val msgtype = (messageContent?.get("msgtype") as? JsonPrimitive)?.content
+                msgtype == "m.bad.encrypted"
+            }
+
+            if (hasUndecryptableMessages) {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                    backgroundColor = MaterialTheme.colors.surface,
+                    elevation = 2.dp
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Text(
+                            "🔐 End-to-End Encryption Status",
+                            style = MaterialTheme.typography.subtitle2,
+                            color = MaterialTheme.colors.primary
+                        )
+                        Text(
+                            "Some messages cannot be decrypted because their encryption sessions have expired. This is normal in single-device setups. Send a new message to establish a fresh encryption session.",
+                            style = MaterialTheme.typography.body2,
+                            color = MaterialTheme.colors.onSurface
+                        )
+                    }
+                }
+            }
+
             LazyColumn(
                 modifier = Modifier
                     .weight(1f)
@@ -531,10 +581,10 @@ fun ChatScreen(
                                             "🔒 This message was sent before you joined the room or from another device. Room keys are not available."
                                         }
                                         body.contains("Session expired") -> {
-                                            "🔄 Session expired while decrypting. The message may be decryptable after refreshing."
+                                            "🔄 This message's encryption session has expired. Send a new message to create a fresh session."
                                         }
                                         body.contains("Can't find the room key") -> {
-                                            "🔑 Room key not found. Waiting for keys from other devices..."
+                                            "🔑 Room key not found. This is normal in single-device setups - send a message to establish encryption."
                                         }
                                         else -> {
                                             "🔐 Unable to decrypt message: ${body.replace("**", "").trim()}"
