@@ -25,7 +25,6 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.builtins.MapSerializer
-import kotlinx.serialization.modules.*
 import kotlinx.serialization.*
 import kotlinx.serialization.json.Json
 
@@ -517,6 +516,26 @@ suspend fun getRoomMessages(roomId: String): List<Event> {
             if (machine != null) {
                 println("🔐 getRoomMessages: Starting decryption process")
                 
+                // Check if OlmMachine is still valid
+                try {
+                    // Quick test to see if OlmMachine is still functional
+                    machine.identityKeys()
+                    println("✅ OlmMachine is functional")
+                } catch (e: Exception) {
+                    println("❌ OlmMachine is not functional: ${e.message}")
+                    // Return all messages as undecryptable
+                    return allMessages.map { event ->
+                        if (event.type == "m.room.encrypted") {
+                            event.copy(
+                                type = "m.room.message",
+                                content = json.parseToJsonElement("""{"msgtype": "m.bad.encrypted", "body": "** Unable to decrypt: OlmMachine not available **"}""")
+                            )
+                        } else {
+                            event
+                        }
+                    }
+                }
+                
                 // Sync once at the beginning to get latest keys for all messages
                 println("🔄 Syncing once before decryption...")
                 val initialSyncResult = syncAndProcessToDevice(10000UL) // 10 second timeout
@@ -597,7 +616,8 @@ suspend fun getRoomMessages(roomId: String): List<Event> {
                                 if (e.message?.contains("Session expired") == true ||
                                     e.message?.contains("panicked") == true ||
                                     e.message?.contains("Invalid event structure") == true ||
-                                    e.message?.contains("Missing required encryption fields") == true) {
+                                    e.message?.contains("Missing required encryption fields") == true ||
+                                    e.message?.contains("OlmMachine object has already been destroyed") == true) {
                                     println("⚠️  Decryption not possible: ${e.message}")
                                     // Return event with appropriate error marker
                                     return@map event.copy(

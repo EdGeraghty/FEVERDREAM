@@ -148,7 +148,10 @@ fun ChatWindow(
                         val body = (messageContent?.get("body") as? JsonPrimitive)?.content ?: ""
                         val msgtype = (messageContent?.get("msgtype") as? JsonPrimitive)?.content ?: "m.text"
 
-                        if (msgtype == "m.text" || msgtype == "m.bad.encrypted") {
+                        // Debug: Log message types to see what's happening
+                        println("📨 Displaying message: sender=${event.sender}, type=${event.type}, msgtype=$msgtype, body length=${body.length}")
+
+                        if (msgtype == "m.text" || msgtype == "m.room.message" || msgtype == "m.bad.encrypted") {
                             Card(
                                 modifier = Modifier
                                     .fillMaxWidth()

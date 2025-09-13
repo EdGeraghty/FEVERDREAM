@@ -48,15 +48,9 @@ fun main() = application {
         windowManager.closeAllChatWindows()
         // Clean up HTTP client
         closeHttpClient()
-        // Clean up OlmMachine resources
-        olmMachine?.let { machine ->
-            try {
-                (machine as? AutoCloseable)?.close()
-                println("✅ OlmMachine resources cleaned up on app exit")
-            } catch (e: Exception) {
-                println("⚠️  Error cleaning up OlmMachine on app exit: ${e.message}")
-            }
-        }
+        // Note: Don't clean up OlmMachine here as it may still be needed
+        // OlmMachine will be cleaned up by the JVM garbage collector
+        println("ℹ️  App closing - OlmMachine will be cleaned up by garbage collector")
         exitProcess(0)
     }, title = "FEVERDREAM - Matrix Client") {
         MatrixApp(windowManager)
