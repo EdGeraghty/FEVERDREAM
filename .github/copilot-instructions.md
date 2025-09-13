@@ -55,6 +55,9 @@
 - [x] Fix UI Loading Wheel Issue
 	Resolved loading wheel that persisted after room data was loaded. Issue was caused by blocking network calls (runBlocking) in composable functions. Fixed by loading encryption status asynchronously during room loading instead of blocking the UI thread. Also improved message loading to check cache first and handle exceptions properly.
 
+- [x] Fix Session Expiration Issues
+	Resolved "bad messagen" issue where encrypted messages appeared undecryptable due to Megolm session expiration. Implemented automatic session renewal during message sending to ensure new messages encrypt successfully. Added comprehensive error handling for historical messages encrypted with expired sessions - these are now properly marked as undecryptable with clear user messages instead of causing application crashes. Application handles single-device Matrix limitations gracefully.
+
 - [ ] Implement Key Backup (Future Enhancement)
 	Key backup functionality identified but not yet implemented. Would allow devices to backup and restore room keys for cross-device message decryption.
 
