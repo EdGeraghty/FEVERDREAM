@@ -1209,77 +1209,28 @@ suspend fun hasRoomKey(roomId: String): Boolean {
     } catch (e: Exception) {
         // Handle session expiration gracefully instead of letting it panic
         if (e.message?.contains("Session expired") == true || e.message?.contains("panicked") == true) {
-            println("⚠️  Session expired detected in hasRoomKey, attempting renewal...")
+            println("⚠️  Session expired detected in hasRoomKey, attempting comprehensive renewal...")
 
-            // Aggressive session renewal - create new outbound group session
+            // Use the comprehensive ensureRoomEncryption function
             try {
-                val encryptionSettings = EncryptionSettings(
-                    algorithm = EventEncryptionAlgorithm.MEGOLM_V1_AES_SHA2,
-                    rotationPeriod = 604800000UL,
-                    rotationPeriodMsgs = 100UL,
-                    historyVisibility = HistoryVisibility.SHARED,
-                    onlyAllowTrustedDevices = false,
-                    errorOnVerifiedUserProblem = false
-                )
-
-                // Create new outbound session by calling shareRoomKey with empty list
-                val newSessionRequests = machine.shareRoomKey(roomId, emptyList(), encryptionSettings)
-                println("🔄 Attempted new session creation with ${newSessionRequests.size} requests")
-
-                // Send the requests immediately
-                for (request in newSessionRequests) {
-                    when (request) {
-                        is Request.ToDevice -> {
-                            val token = currentAccessToken ?: return false
-                            try {
-                                val response = client.put("$currentHomeserver/_matrix/client/v3/sendToDevice/${request.eventType}/${System.currentTimeMillis()}") {
-                                    bearerAuth(token)
-                                    contentType(ContentType.Application.Json)
-                                    val body = convertMapToHashMap(request.body)
-                                    if (body is Map<*, *>) {
-                                        @Suppress("UNCHECKED_CAST")
-                                        val mapBody = body as Map<String, Any>
-                                        val jsonBody = JsonObject(mapBody.mapValues { anyToJsonElement(it.value) })
-                                        val messagesWrapper = JsonObject(mapOf("messages" to jsonBody))
-                                        setBody(messagesWrapper)
-                                    }
-                                }
-                                if (response.status == HttpStatusCode.OK) {
-                                    println("✅ New session request sent successfully")
-                                }
-                            } catch (sendException: Exception) {
-                                println("⚠️  Failed to send new session request: ${sendException.message}")
-                            }
-                        }
-                        else -> {
-                            println("⚠️  Unhandled new session request type: ${request::class.simpleName}")
-                        }
+                val renewalSuccess = ensureRoomEncryption(roomId)
+                if (renewalSuccess) {
+                    // Test again after comprehensive renewal
+                    return try {
+                        machine.encrypt(roomId, "m.room.message", """{"msgtype": "m.text", "body": "test_after_renewal"}""")
+                        println("✅ Session renewal successful")
+                        true
+                    } catch (retryException: Exception) {
+                        println("⚠️  Session renewal verification failed: ${retryException.message}")
+                        false
                     }
-                }
-
-                // Sync immediately to process the new session
-                if (newSessionRequests.isNotEmpty()) {
-                    try {
-                        withTimeout(3000L) {
-                            syncAndProcessToDevice(2000UL)
-                        }
-                        println("✅ New session sync completed")
-
-                        // Test again after renewal
-                        return try {
-                            machine.encrypt(roomId, "m.room.message", """{"msgtype": "m.text", "body": "test_after_renewal"}""")
-                            println("✅ Session renewal successful")
-                            true
-                        } catch (retryException: Exception) {
-                            println("⚠️  Session renewal failed: ${retryException.message}")
-                            false
-                        }
-                    } catch (syncException: Exception) {
-                        println("⚠️  New session sync failed: ${syncException.message}")
-                    }
+                } else {
+                    println("❌ Comprehensive session renewal failed")
+                    return false
                 }
             } catch (renewalException: Exception) {
                 println("⚠️  Session renewal failed: ${renewalException.message}")
+                return false
             }
         } else {
             println("⚠️  Room key test failed: ${e.message}")
@@ -1298,63 +1249,25 @@ suspend fun canEncryptRoom(roomId: String): Boolean {
         println("⚠️  Encryption test failed: ${e.message}")
         // Try to renew session if it failed
         if (e.message?.contains("Session expired") == true || e.message?.contains("panicked") == true) {
-            println("🔄 Attempting session renewal in canEncryptRoom...")
+            println("🔄 Attempting comprehensive session renewal in canEncryptRoom...")
             try {
-                // Force session renewal
-                val encryptionSettings = EncryptionSettings(
-                    algorithm = EventEncryptionAlgorithm.MEGOLM_V1_AES_SHA2,
-                    rotationPeriod = 604800000UL,
-                    rotationPeriodMsgs = 100UL,
-                    historyVisibility = HistoryVisibility.SHARED,
-                    onlyAllowTrustedDevices = false,
-                    errorOnVerifiedUserProblem = false
-                )
-
-                val renewalRequests = machine.shareRoomKey(roomId, emptyList(), encryptionSettings)
-                println("🔄 Created ${renewalRequests.size} renewal requests")
-
-                // Send renewal requests
-                for (request in renewalRequests) {
-                    when (request) {
-                        is Request.ToDevice -> {
-                            val token = currentAccessToken ?: return false
-                            val response = client.put("$currentHomeserver/_matrix/client/v3/sendToDevice/${request.eventType}/${System.currentTimeMillis()}") {
-                                bearerAuth(token)
-                                contentType(ContentType.Application.Json)
-                                val body = convertMapToHashMap(request.body)
-                                if (body is Map<*, *>) {
-                                    @Suppress("UNCHECKED_CAST")
-                                    val mapBody = body as Map<String, Any>
-                                    val jsonBody = JsonObject(mapBody.mapValues { anyToJsonElement(it.value) })
-                                    val messagesWrapper = JsonObject(mapOf("messages" to jsonBody))
-                                    setBody(messagesWrapper)
-                                }
-                            }
-                            if (response.status == HttpStatusCode.OK) {
-                                println("✅ Session renewal request sent")
-                            }
-                        }
-                        else -> {
-                            println("⚠️  Unhandled renewal request type: ${request::class.simpleName}")
-                        }
-                    }
+                // Use the comprehensive ensureRoomEncryption function
+                val renewalSuccess = ensureRoomEncryption(roomId)
+                if (renewalSuccess) {
+                    // Test again after comprehensive renewal
+                    machine.encrypt(roomId, "m.room.message", """{"msgtype": "m.text", "body": "test"}""")
+                    println("✅ Session renewed successfully via ensureRoomEncryption")
+                    return true
+                } else {
+                    println("❌ Comprehensive session renewal failed")
+                    return false
                 }
-
-                // Quick sync to process renewal
-                kotlinx.coroutines.runBlocking {
-                    syncAndProcessToDevice(2000UL)
-                }
-
-                // Test again
-                machine.encrypt(roomId, "m.room.message", """{"msgtype": "m.text", "body": "test"}""")
-                println("✅ Session renewed successfully")
-                true
             } catch (renewalException: Exception) {
                 println("❌ Session renewal failed: ${renewalException.message}")
-                false
+                return false
             }
         } else {
-            false
+            return false
         }
     }
 }

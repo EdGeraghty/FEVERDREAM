@@ -895,61 +895,25 @@ suspend fun sendMessage(roomId: String, message: String, skipEncryptionSetup: Bo
 
                         // Handle session expiration specifically
                         if (encryptError.message?.contains("Session expired") == true || encryptError.message?.contains("panicked") == true) {
-                            println("⚠️  Session expired during encryption, attempting to renew...")
+                            println("⚠️  Session expired during encryption, attempting comprehensive renewal...")
 
-                            // Create new outbound group session
+                            // Use the comprehensive ensureRoomEncryption function
                             try {
-                                // Create new encryption settings for session renewal
-                                val encryptionSettings = EncryptionSettings(
-                                    algorithm = EventEncryptionAlgorithm.MEGOLM_V1_AES_SHA2,
-                                    rotationPeriod = 604800000UL, // 1 week
-                                    rotationPeriodMsgs = 100UL,   // 100 messages
-                                    historyVisibility = HistoryVisibility.SHARED,
-                                    onlyAllowTrustedDevices = false,
-                                    errorOnVerifiedUserProblem = false
-                                )
-
-                                // Create new outbound session by calling shareRoomKey with empty list
-                                val newSessionRequests = machine.shareRoomKey(roomId, emptyList(), encryptionSettings)
-
-                                // Send room key requests
-                                for (request in newSessionRequests) {
-                                    when (request) {
-                                        is Request.ToDevice -> {
-                                            val response = client.put("$currentHomeserver/_matrix/client/v3/sendToDevice/${request.eventType}/${System.currentTimeMillis()}") {
-                                                bearerAuth(currentAccessToken!!)
-                                                contentType(ContentType.Application.Json)
-                                                val body = convertMapToHashMap(request.body)
-                                                if (body is Map<*, *>) {
-                                                    @Suppress("UNCHECKED_CAST")
-                                                    val mapBody = body as Map<String, Any>
-                                                    val jsonBody = JsonObject(mapBody.mapValues { anyToJsonElement(it.value) })
-                                                    val messagesWrapper = JsonObject(mapOf("messages" to jsonBody))
-                                                    setBody(messagesWrapper)
-                                                }
-                                            }
-                                            if (response.status == HttpStatusCode.OK) {
-                                                println("✅ New session created successfully")
-                                            }
-                                        }
-                                        else -> {
-                                            println("⚠️  Unhandled new session request type: ${request::class.simpleName}")
-                                        }
-                                    }
+                                val renewalSuccess = crypto.ensureRoomEncryption(roomId)
+                                if (renewalSuccess) {
+                                    // Retry encryption with renewed session
+                                    val retryEncryptedContent = machine.encrypt(roomId, "m.room.message", """{"body": "$message", "msgtype": "m.text"}""")
+                                    finalContent = retryEncryptedContent
+                                    eventType = "m.room.encrypted"
+                                    println("✅ Message encrypted successfully after comprehensive session renewal")
+                                } else {
+                                    println("❌ Comprehensive session renewal failed, sending as plain text")
+                                    val requestBody = SendMessageRequest(body = message)
+                                    finalContent = json.encodeToString(requestBody)
+                                    eventType = "m.room.message"
                                 }
-
-                                // Sync immediately to process the new session
-                                println("🔄 Syncing to process new session...")
-                                syncAndProcessToDevice(5000UL)
-
-                                // Retry encryption with renewed session
-                                val retryEncryptedContent = machine.encrypt(roomId, "m.room.message", """{"body": "$message", "msgtype": "m.text"}""")
-                                finalContent = retryEncryptedContent
-                                eventType = "m.room.encrypted"
-                                println("✅ Message encrypted successfully after session renewal")
                             } catch (renewalException: Exception) {
-                                println("❌ Session renewal failed: ${renewalException.message}")
-                                // Fallback to plain text
+                                println("❌ Session renewal failed: ${renewalException.message}, sending as plain text")
                                 val requestBody = SendMessageRequest(body = message)
                                 finalContent = json.encodeToString(requestBody)
                                 eventType = "m.room.message"
@@ -978,48 +942,20 @@ suspend fun sendMessage(roomId: String, message: String, skipEncryptionSetup: Bo
                     if (encryptError.message?.contains("Session expired") == true || encryptError.message?.contains("panicked") == true) {
                         println("⚠️  Session expired during encryption, attempting emergency renewal...")
 
-                        // Emergency session renewal - create new outbound session
+                        // Emergency session renewal - use comprehensive approach
                         try {
-                            val encryptionSettings = EncryptionSettings(
-                                algorithm = EventEncryptionAlgorithm.MEGOLM_V1_AES_SHA2,
-                                rotationPeriod = 604800000UL,
-                                rotationPeriodMsgs = 100UL,
-                                historyVisibility = HistoryVisibility.SHARED,
-                                onlyAllowTrustedDevices = false,
-                                errorOnVerifiedUserProblem = false
-                            )
-
-                            // Create new outbound session
-                            val emergencyRequests = machine.shareRoomKey(roomId, emptyList(), encryptionSettings)
-
-                            for (request in emergencyRequests) {
-                                when (request) {
-                                    is Request.ToDevice -> {
-                                        val response = client.put("$currentHomeserver/_matrix/client/v3/sendToDevice/${request.eventType}/${System.currentTimeMillis()}") {
-                                            bearerAuth(currentAccessToken!!)
-                                            contentType(ContentType.Application.Json)
-                                            val body = convertMapToHashMap(request.body)
-                                            if (body is Map<*, *>) {
-                                                @Suppress("UNCHECKED_CAST")
-                                                val mapBody = body as Map<String, Any>
-                                                val jsonBody = JsonObject(mapBody.mapValues { anyToJsonElement(it.value) })
-                                                val messagesWrapper = JsonObject(mapOf("messages" to jsonBody))
-                                                setBody(messagesWrapper)
-                                            }
-                                        }
-                                    }
-                                    else -> {
-                                        println("⚠️  Unhandled emergency request type: ${request::class.simpleName}")
-                                    }
-                                }
+                            val emergencySuccess = crypto.ensureRoomEncryption(roomId)
+                            if (emergencySuccess) {
+                                val emergencyEncryptedContent = machine.encrypt(roomId, "m.room.message", """{"body": "$message", "msgtype": "m.text"}""")
+                                finalContent = emergencyEncryptedContent
+                                eventType = "m.room.encrypted"
+                                println("✅ Emergency encryption successful")
+                            } else {
+                                println("❌ Emergency renewal failed, sending as plain text")
+                                val requestBody = SendMessageRequest(body = message)
+                                finalContent = json.encodeToString(requestBody)
+                                eventType = "m.room.message"
                             }
-
-                            // Sync and retry
-                            syncAndProcessToDevice(3000UL)
-                            val emergencyEncryptedContent = machine.encrypt(roomId, "m.room.message", """{"body": "$message", "msgtype": "m.text"}""")
-                            finalContent = emergencyEncryptedContent
-                            eventType = "m.room.encrypted"
-                            println("✅ Emergency encryption successful")
                         } catch (emergencyException: Exception) {
                             println("❌ Emergency renewal failed: ${emergencyException.message}")
                             val requestBody = SendMessageRequest(body = message)
