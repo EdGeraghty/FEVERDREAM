@@ -4,9 +4,8 @@ import crypto.initializeEncryption
 import io.ktor.client.call.*
 import io.ktor.client.request.*
 import io.ktor.http.*
-import kotlinx.serialization.json.JsonObject
 import models.*
-import network.NetworkClient.json
+import kotlinx.serialization.json.Json
 
 /**
  * Authentication API functions for Matrix client
@@ -26,7 +25,7 @@ suspend fun discoverHomeserver(domain: String): String {
             println("Client well-known response body: $clientResponseText")
 
             try {
-                val clientWellKnown = json.decodeFromString<ClientWellKnownResponse>(clientResponseText)
+                val clientWellKnown = Json.decodeFromString<ClientWellKnownResponse>(clientResponseText)
                 val homeserverInfo = clientWellKnown.homeserver
 
                 if (homeserverInfo != null) {
@@ -64,7 +63,7 @@ suspend fun discoverHomeserver(domain: String): String {
                 println("Server delegation response body: $serverResponseText")
 
                 try {
-                    val delegation = json.decodeFromString<ServerDelegationResponse>(serverResponseText)
+                    val delegation = Json.decodeFromString<ServerDelegationResponse>(serverResponseText)
                     val serverValue = delegation.mServer
 
                     if (serverValue != null) {
@@ -185,7 +184,7 @@ suspend fun login(username: String, password: String, homeserver: String): Login
 
             val response = client.post("$finalHomeserver/_matrix/client/v3/login") {
                 contentType(ContentType.Application.Json)
-                setBody(json.encodeToString(loginRequest))
+                setBody("""{"type":"m.login.password","identifier":{"type":"m.id.user","user":"$userId"},"password":"$password"}""")
             }
 
             println("📥 Login response: ${response.status}")
@@ -226,7 +225,7 @@ suspend fun login(username: String, password: String, homeserver: String): Login
 
                         val oldResponse = client.post("$finalHomeserver/_matrix/client/v3/login") {
                             contentType(ContentType.Application.Json)
-                            setBody(json.encodeToString(oldLoginRequest))
+                            setBody("""{"type":"m.login.password","user":"$userId","password":"$password"}""")
                         }
 
                         if (oldResponse.status == HttpStatusCode.OK) {
@@ -283,7 +282,7 @@ suspend fun login(username: String, password: String, homeserver: String): Login
 
                 val fallbackResponse = client.post("$cleanHomeserver/_matrix/client/v3/login") {
                     contentType(ContentType.Application.Json)
-                    setBody(json.encodeToString(fallbackRequest))
+                    setBody("""{"type":"m.login.password","identifier":{"type":"m.id.user","user":"$userId"},"password":"$password"}""")
                 }
 
                 println("📥 Fallback login response: ${fallbackResponse.status}")
