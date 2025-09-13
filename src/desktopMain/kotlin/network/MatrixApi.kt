@@ -39,13 +39,6 @@ fun cleanupOldKeyRequests() {
     recentlyRequestedKeys.entries.removeIf { it.value < cutoffTime }
 }
 
-// Global state for Matrix client
-var currentAccessToken: String? = null
-var currentHomeserver: String = "https://matrix.org"
-var currentDeviceId: String? = null
-var currentUserId: String? = null
-var currentSyncToken: String = ""
-
 suspend fun discoverHomeserver(domain: String): String {
     try {
         // Try to discover homeserver via .well-known/matrix/client first

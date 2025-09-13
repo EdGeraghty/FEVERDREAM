@@ -1,5 +1,9 @@
 package crypto
 
+import network.currentAccessToken
+import network.currentHomeserver
+import network.currentSyncToken
+
 import io.ktor.client.call.*
 import io.ktor.client.request.*
 import io.ktor.http.*
