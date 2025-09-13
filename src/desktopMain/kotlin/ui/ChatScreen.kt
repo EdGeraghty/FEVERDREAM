@@ -16,6 +16,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.*
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.*
+import kotlinx.coroutines.TimeoutCancellationException
 import models.Event
 import network.*
 import crypto.*
@@ -67,7 +68,11 @@ fun ChatScreen(
                     isLoading = false
                     println("✅ ChatScreen: Loading complete from cache, isLoading = false")
                 } else {
-                    messages = getRoomMessages(roomId)
+                    // Add timeout to prevent hanging on network issues
+                    val loadedMessages = withTimeout(20000L) { // 20 second timeout
+                        getRoomMessages(roomId)
+                    }
+                    messages = loadedMessages
                     println("✅ ChatScreen: Loaded ${messages.size} messages for room $roomId")
                     isLoading = false
                     println("✅ ChatScreen: Loading complete, isLoading = false")
@@ -91,6 +96,14 @@ fun ChatScreen(
                     } catch (e: Exception) {
                         println("⚠️  Proactive encryption setup failed: ${e.message}")
                     }
+                }
+            } catch (e: TimeoutCancellationException) {
+                println("❌ ChatScreen: Loading messages timed out for room $roomId")
+                isLoading = false
+                // Show empty messages or cached if available
+                val cachedMessages = crypto.roomMessageCache[roomId]
+                if (cachedMessages != null) {
+                    messages = cachedMessages.toList()
                 }
             } catch (e: Exception) {
                 println("❌ Error loading messages: ${e.message}")
