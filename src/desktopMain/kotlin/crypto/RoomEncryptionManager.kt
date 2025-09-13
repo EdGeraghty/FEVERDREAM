@@ -285,6 +285,10 @@ suspend fun ensureRoomEncryption(roomId: String): Boolean {
                 }
             }
 
+            // CRITICAL FIX: Add delay to allow room keys to propagate to other devices
+            println("⏳ Waiting for room keys to propagate to other devices...")
+            kotlinx.coroutines.delay(3000) // Wait 3 seconds for key propagation
+
             // Test encryption again after creating new session
             try {
                 machine.encrypt(roomId, "m.room.message", """{"msgtype": "m.text", "body": "session_test_after_sharing"}""")

@@ -281,6 +281,10 @@ fun ChatScreen(
                                             println("🔐 ensureRoomEncryption returned: $encryptionResult")
 
                                             if (encryptionResult) {
+                                                // Add delay to allow room keys to propagate
+                                                println("⏳ Waiting for room keys to propagate before sending...")
+                                                kotlinx.coroutines.delay(2000)
+
                                                 println("📤 Calling sendMessage...")
                                                 val sendResult = sendMessage(roomId, newMessage)
                                                 println("📤 sendMessage returned: $sendResult")
