@@ -36,7 +36,7 @@ fun cleanupOldKeyRequests() {
 /**
  * Message handling API functions for Matrix client
  */
-suspend fun getRoomMessages(roomId: String): List<Event> {
+suspend fun getRoomMessages(roomId: String, skipDecryption: Boolean = false): List<Event> {
     val token = currentAccessToken ?: return emptyList()
     println("🔍 getRoomMessages: Fetching messages for room $roomId")
 
@@ -61,6 +61,12 @@ suspend fun getRoomMessages(roomId: String): List<Event> {
 
             // Update cache with merged messages
             roomMessageCache[roomId] = allMessages.takeLast(100).toMutableList()
+
+            // Skip decryption if requested
+            if (skipDecryption) {
+                println("⏭️ getRoomMessages: Skipping decryption as requested")
+                return allMessages
+            }
 
             // Decrypt encrypted messages from the merged list
             val machine = olmMachine

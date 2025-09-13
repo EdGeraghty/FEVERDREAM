@@ -12,6 +12,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.runtime.*
 import androidx.compose.ui.*
 import androidx.compose.ui.unit.dp
@@ -44,15 +45,15 @@ fun ChatScreen(
         while (true) {
             try {
                 val cachedMessages = crypto.roomMessageCache[roomId] ?: emptyList()
-                if (cachedMessages.size != messages.size && !isSending) {
-                    // Only refresh if we're not currently sending a message
+                if (cachedMessages.size != messages.size && !isSending && !isLoading) {
+                    // Only refresh if we're not currently sending a message or loading
                     println("🔄 Refreshing messages from cache: ${cachedMessages.size} vs ${messages.size}")
                     messages = cachedMessages.toList() // Use cached messages directly to avoid API calls
                 }
             } catch (e: Exception) {
                 println("⚠️  Error during periodic refresh: ${e.message}")
             }
-            kotlinx.coroutines.delay(5000) // Check every 5 seconds instead of 2
+            kotlinx.coroutines.delay(10000) // Check every 10 seconds instead of 5
         }
     }
 
@@ -60,6 +61,9 @@ fun ChatScreen(
         scope.launch {
             try {
                 println("🔄 ChatScreen: Loading messages for room $roomId")
+                isLoading = true // Ensure loading state is set
+                println("🔄 ChatScreen: Set isLoading = true")
+
                 // Check cache first
                 val cachedMessages = crypto.roomMessageCache[roomId]
                 if (cachedMessages != null && cachedMessages.isNotEmpty()) {
@@ -68,8 +72,10 @@ fun ChatScreen(
                     isLoading = false
                     println("✅ ChatScreen: Loading complete from cache, isLoading = false")
                 } else {
+                    println("🌐 ChatScreen: No cached messages, fetching from API...")
                     // Add timeout to prevent hanging on network issues
                     val loadedMessages = withTimeout(20000L) { // 20 second timeout
+                        println("⏱️ ChatScreen: Starting getRoomMessages with 20s timeout")
                         getRoomMessages(roomId)
                     }
                     messages = loadedMessages
@@ -100,14 +106,17 @@ fun ChatScreen(
             } catch (e: TimeoutCancellationException) {
                 println("❌ ChatScreen: Loading messages timed out for room $roomId")
                 isLoading = false
+                println("🔄 ChatScreen: Set isLoading = false due to timeout")
                 // Show empty messages or cached if available
                 val cachedMessages = crypto.roomMessageCache[roomId]
                 if (cachedMessages != null) {
                     messages = cachedMessages.toList()
+                    println("📋 ChatScreen: Fallback to cached messages after timeout: ${cachedMessages.size}")
                 }
             } catch (e: Exception) {
                 println("❌ Error loading messages: ${e.message}")
                 isLoading = false
+                println("🔄 ChatScreen: Set isLoading = false due to error")
             }
         }
     }
@@ -131,7 +140,36 @@ fun ChatScreen(
 
         if (isLoading) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator()
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    CircularProgressIndicator()
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text(
+                        "Loading messages...",
+                        style = MaterialTheme.typography.body1,
+                        color = MaterialTheme.colors.onSurface
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        "If this takes too long, check your network connection.",
+                        style = MaterialTheme.typography.caption,
+                        color = MaterialTheme.colors.onSurface.copy(alpha = 0.7f)
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    OutlinedButton(
+                        onClick = {
+                            println("🛑 User cancelled loading")
+                            isLoading = false
+                            // Try to use cached messages if available
+                            val cachedMessages = crypto.roomMessageCache[roomId]
+                            if (cachedMessages != null) {
+                                messages = cachedMessages.toList()
+                                println("📋 Used cached messages after cancel: ${cachedMessages.size}")
+                            }
+                        }
+                    ) {
+                        Text("Cancel Loading")
+                    }
+                }
             }
         } else {
             // Show info message about encryption state
@@ -156,7 +194,11 @@ fun ChatScreen(
                             color = MaterialTheme.colors.primary
                         )
                         Text(
-                            "Some messages cannot be decrypted because their encryption sessions have expired. This is normal in single-device setups. Send a new message to establish a fresh encryption session.",
+                            "Some messages cannot be decrypted because their encryption keys are not available. This is normal when:\n" +
+                            "• Messages were sent before you joined the room\n" +
+                            "• Messages were sent from other devices\n" +
+                            "• You're using a single-device setup\n\n" +
+                            "The app automatically requests missing keys from other devices. Send a new message to establish a fresh encryption session.",
                             style = MaterialTheme.typography.body2,
                             color = MaterialTheme.colors.onSurface
                         )
@@ -194,13 +236,18 @@ fun ChatScreen(
                                     // Display different messages based on the error content
                                     val displayText = when {
                                         body.contains("Room key not available") -> {
-                                            "🔒 This message was sent before you joined the room or from another device. Room keys are not available."
+                                            "� This message cannot be decrypted because the encryption key is not available. " +
+                                            "This happens when messages were sent before you joined or from other devices. " +
+                                            "The app has requested the key automatically."
                                         }
                                         body.contains("Session expired") -> {
                                             "🔄 This message's encryption session has expired. Send a new message to create a fresh session."
                                         }
                                         body.contains("Can't find the room key") -> {
-                                            "🔑 Room key not found. This is normal in single-device setups - send a message to establish encryption."
+                                            "� Room key not found. This is normal in single-device setups - send a message to establish encryption."
+                                        }
+                                        body.contains("OlmMachine not available") -> {
+                                            "⚠️ Encryption system not ready. Please restart the app."
                                         }
                                         else -> {
                                             "🔐 Unable to decrypt message: ${body.replace("**", "").trim()}"
@@ -236,6 +283,24 @@ fun ChatScreen(
                     modifier = Modifier.weight(1f),
                     enabled = !isSending
                 )
+                Spacer(modifier = Modifier.width(8.dp))
+                IconButton(
+                    onClick = {
+                        println("🔄 Refresh button clicked")
+                        scope.launch {
+                            try {
+                                val refreshedMessages = getRoomMessages(roomId)
+                                messages = refreshedMessages
+                                println("✅ Messages refreshed: ${messages.size} messages")
+                            } catch (e: Exception) {
+                                println("❌ Error refreshing messages: ${e.message}")
+                            }
+                        }
+                    },
+                    enabled = !isSending
+                ) {
+                    Icon(Icons.Default.Refresh, contentDescription = "Refresh messages")
+                }
                 Spacer(modifier = Modifier.width(8.dp))
                 if (isSending) {
                     CircularProgressIndicator(modifier = Modifier.size(24.dp))
