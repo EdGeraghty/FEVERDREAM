@@ -72,7 +72,7 @@ fun clearSessionInfo() {
     currentUserId = null
     currentDeviceId = null
     currentAccessToken = null
-    currentHomeserver = null
+    currentHomeserver = "https://matrix.org"
     currentSyncToken = ""
     olmMachine = null
 }

@@ -524,6 +524,7 @@ suspend fun ensureRoomEncryption(roomId: String): Boolean {
                                 setBody(messagesWrapper)
                             } else {
                                 setBody(JsonObject(mapOf("messages" to JsonObject(mapOf()))))
+                            }
                         }
                     }
                     else -> {
