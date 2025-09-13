@@ -1,28 +1,3 @@
-package network
-
-import crypto.initializeEncryption
-import crypto.syncAndProcessToDevice
-import crypto.roomMessageCache
-import crypto.isRoomEncrypted
-import crypto.hasRoomKey
-import crypto.ensureRoomEncryption
-import crypto.olmMachine
-import io.ktor.client.call.*
-import io.ktor.client.request.*
-import io.ktor.http.*
-import kotlinx.coroutines.*
-import models.*
-import org.matrix.rustcomponents.sdk.crypto.*
-import uniffi.matrix_sdk_crypto.CollectStrategy
-import uniffi.matrix_sdk_crypto.DecryptionSettings
-import uniffi.matrix_sdk_crypto.TrustRequirement
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonElement
-import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.builtins.MapSerializer
-import kotlinx.serialization.*
-
 // Track recently requested session keys to avoid duplicate requests
 // Use session_id + sender_key for better uniqueness and longer tracking
 val recentlyRequestedKeys = mutableMapOf<String, Long>()
@@ -33,18 +8,7 @@ fun cleanupOldKeyRequests() {
     recentlyRequestedKeys.entries.removeIf { it.value < cutoffTime }
 }
 
-/**
- * Message handling API functions for Matrix client
- */
-suspend fun getRoomMessages(roomId: String, skipDecryption: Boolean = false): List<Event> {
-    val token = currentAccessToken ?: return emptyList()
-    println("🔍 getRoomMessages: Fetching messages for room $roomId")
-
-    // Get cached messages first
-    val cachedMessages = roomMessageCache[roomId] ?: emptyList()
-    println("📋 getRoomMessages: Found ${cachedMessages.size} cached messages")
-
-    try {
+private suspend fun fetchMessagesFromApi(roomId: String, token: String): List<Event> {
         val response = client.get("$currentHomeserver/_matrix/client/v3/rooms/$roomId/messages") {
             bearerAuth(token)
             parameter("limit", "50")
@@ -54,15 +18,38 @@ suspend fun getRoomMessages(roomId: String, skipDecryption: Boolean = false): Li
             val messagesResponse = response.body<RoomMessagesResponse>()
             val fetchedMessages = messagesResponse.chunk.reversed()
             println("📥 getRoomMessages: Fetched ${fetchedMessages.size} messages from API")
+            return fetchedMessages
+        } else {
+            println("❌ getRoomMessages: Bad response status ${response.status}")
+            return emptyList()
+        }
+    }
 
-            // Merge cached and fetched messages, avoiding duplicates
-            val allMessages = (cachedMessages + fetchedMessages).distinctBy { it.event_id }
-            println("🔀 getRoomMessages: Merged to ${allMessages.size} total messages")
+    private fun mergeAndUpdateCache(roomId: String, cachedMessages: List<Event>, fetchedMessages: List<Event>): List<Event> {
+        val allMessages = (cachedMessages + fetchedMessages).distinctBy { it.event_id }
+        println("🔀 getRoomMessages: Merged to ${allMessages.size} total messages")
+        roomMessageCache[roomId] = allMessages.takeLast(100).toMutableList()
+        return allMessages
+    }
 
-            // Update cache with merged messages
-            roomMessageCache[roomId] = allMessages.takeLast(100).toMutableList()
+    /**
+     * Message handling API functions for Matrix client
+     */
+    suspend fun getRoomMessages(roomId: String, skipDecryption: Boolean = false): List<Event> {
+        val token = currentAccessToken ?: return emptyList()
+        println("🔍 getRoomMessages: Fetching messages for room $roomId")
 
-            // Skip decryption if requested
+        // Get cached messages first
+        val cachedMessages = roomMessageCache[roomId] ?: emptyList()
+        println("📋 getRoomMessages: Found ${cachedMessages.size} cached messages")
+
+        try {
+            val fetchedMessages = fetchMessagesFromApi(roomId, token)
+            if (fetchedMessages.isEmpty()) {
+                return cachedMessages
+            }
+
+            val allMessages = mergeAndUpdateCache(roomId, cachedMessages, fetchedMessages)            // Skip decryption if requested
             if (skipDecryption) {
                 println("⏭️ getRoomMessages: Skipping decryption as requested")
                 return allMessages
