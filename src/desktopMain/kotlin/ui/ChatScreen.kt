@@ -29,8 +29,8 @@ fun ChatScreen(
     onBack: () -> Unit
 ) {
     println("💬 ChatScreen called for room: $roomId")
-    // Use GlobalScope for long-running operations to avoid composition cancellation
-    val scope = remember { kotlinx.coroutines.GlobalScope }
+    // Use rememberCoroutineScope for coroutine operations in composables
+    val scope = rememberCoroutineScope()
     var messages by remember { mutableStateOf<List<Event>>(emptyList()) }
     var newMessage by remember { mutableStateOf("") }
     var isLoading by remember { mutableStateOf(true) }
