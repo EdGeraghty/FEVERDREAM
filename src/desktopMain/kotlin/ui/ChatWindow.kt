@@ -360,7 +360,9 @@ fun ChatWindow(
                                             if (canEncrypt) {
                                                 // Skip encryption setup - we've already verified it's available
                                                 println("📤 Calling sendMessage (skipping encryption setup)...")
-                                                val sendResult = sendMessage(roomId, newMessage, skipEncryptionSetup = true)
+                                                val sendResult = withTimeout(30000L) { // 30 second timeout for sending
+                                                    sendMessage(roomId, newMessage, skipEncryptionSetup = true)
+                                                }
                                                 println("📤 sendMessage returned: $sendResult")
 
                                                 if (sendResult) {
@@ -393,7 +395,9 @@ fun ChatWindow(
 
                                                 if (encryptionResult) {
                                                     println("📤 Calling sendMessage...")
-                                                    val sendResult = sendMessage(roomId, newMessage)
+                                                    val sendResult = withTimeout(30000L) { // 30 second timeout for sending
+                                                        sendMessage(roomId, newMessage)
+                                                    }
                                                     println("📤 sendMessage returned: $sendResult")
 
                                                     if (sendResult) {

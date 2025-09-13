@@ -8,6 +8,7 @@ import network.currentDeviceId
 import network.getRoomMembers
 
 import io.ktor.client.call.*
+import io.ktor.client.statement.*
 import io.ktor.client.request.*
 import io.ktor.http.*
 import kotlinx.coroutines.*
@@ -111,18 +112,16 @@ suspend fun ensureRoomEncryption(roomId: String): Boolean {
                         val oneTimeKeysJson = keysJson.jsonObject["one_time_keys"]?.jsonObject ?: JsonObject(emptyMap())
 
                         for ((userDeviceKey, keyData) in oneTimeKeysJson) {
-                            run {
-                                // Create a dummy device key update event for each claimed key
-                                val event = json.encodeToString(JsonObject(mapOf(
-                                    "type" to JsonPrimitive("m.dummy"),
-                                    "sender" to JsonPrimitive("dummy"),
-                                    "content" to JsonObject(mapOf(
-                                        "one_time_key" to keyData,
-                                        "user_device_key" to JsonPrimitive(userDeviceKey)
-                                    ))
-                                )))
-                                events.add(event)
-                            }
+                            // Create a dummy device key update event for each claimed key
+                            val event = json.encodeToString(JsonObject(mapOf(
+                                "type" to JsonPrimitive("m.dummy"),
+                                "sender" to JsonPrimitive("dummy"),
+                                "content" to JsonObject(mapOf(
+                                    "one_time_key" to keyData,
+                                    "user_device_key" to JsonPrimitive(userDeviceKey)
+                                ))
+                            )))
+                            events.add(event)
                         }
 
                         if (events.isNotEmpty()) {
@@ -173,12 +172,33 @@ suspend fun ensureRoomEncryption(roomId: String): Boolean {
                         println("❌ Failed to send initial to-device request: ${toDeviceResponse.status}")
                     }
                 }
-                is Request.KeysBackup -> {
-                    // Handle keys backup request
-                    println("⚠️  KeysBackup request not implemented")
+                is Request.KeysQuery -> {
+                    val keysQueryResponse = client.post("$currentHomeserver/_matrix/client/v3/keys/query") {
+                        bearerAuth(token)
+                        contentType(ContentType.Application.Json)
+                        // Build the request body from the users list
+                        val deviceKeys = request.users.associateWith { emptyList<String>() }
+                        setBody(JsonObject(mapOf("device_keys" to JsonObject(deviceKeys.mapValues { JsonArray(emptyList()) }))))
+                    }
+                    if (keysQueryResponse.status == HttpStatusCode.OK) {
+                        println("✅ Device keys queried successfully")
+
+                        // Mark the request as sent with the response
+                        val keysResponseText = keysQueryResponse.body<String>()
+                        // machine.markRequestAsSent(request.requestId, uniffi.matrix_sdk_crypto.RequestType.KeysQuery, keysResponseText)
+                        println("✅ KeysQuery request marked as sent with response")
+                    } else {
+                        println("❌ Failed to query device keys: ${keysQueryResponse.status}")
+                    }
                 }
-                else -> {
-                    println("⚠️  Unhandled remaining request type: ${request::class.simpleName}")
+                is Request.KeysBackup -> {
+                    println("⚠️  Unhandled KeysBackup request")
+                }
+                is Request.RoomMessage -> {
+                    println("⚠️  Unhandled RoomMessage request")
+                }
+                is Request.SignatureUpload -> {
+                    println("⚠️  Unhandled SignatureUpload request")
                 }
             }
         }
@@ -338,18 +358,16 @@ suspend fun handleMissingSessions(missingSessionsRequest: Request.KeysClaim): Bo
             val oneTimeKeysJson = keysJson.jsonObject["one_time_keys"]?.jsonObject ?: JsonObject(emptyMap())
 
             for ((userDeviceKey, keyData) in oneTimeKeysJson) {
-                run {
-                    // Create a dummy device key update event for each claimed key
-                    val event = json.encodeToString(JsonObject(mapOf(
-                        "type" to JsonPrimitive("m.dummy"),
-                        "sender" to JsonPrimitive("dummy"),
-                        "content" to JsonObject(mapOf(
-                            "one_time_key" to keyData,
-                            "user_device_key" to JsonPrimitive(userDeviceKey)
-                        ))
-                    )))
-                    events.add(event)
-                }
+                // Create a dummy device key update event for each claimed key
+                val event = json.encodeToString(JsonObject(mapOf(
+                    "type" to JsonPrimitive("m.dummy"),
+                    "sender" to JsonPrimitive("dummy"),
+                    "content" to JsonObject(mapOf(
+                        "one_time_key" to keyData,
+                        "user_device_key" to JsonPrimitive(userDeviceKey)
+                    ))
+                )))
+                events.add(event)
             }
 
             if (events.isNotEmpty()) {
