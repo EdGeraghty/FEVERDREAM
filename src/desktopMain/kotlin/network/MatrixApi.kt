@@ -718,48 +718,7 @@ suspend fun getRoomMessages(roomId: String): List<Event> {
                                         val eventJsonForKeyRequest = json.encodeToString(event)
                                         val keyRequestPair = machine.requestRoomKey(eventJsonForKeyRequest, roomId)
 
-                                        // Send a cancellation request first if it exists (for previous requests)
-                                        val cancellationRequest = keyRequestPair.cancellation
-                                        if (cancellationRequest != null) {
-                                            when (cancellationRequest) {
-                                                is Request.ToDevice -> {
-                                                    println("📤 Sending key request cancellation for previous request")
-                                                    try {
-                                                        val cancelResponse = client.put("$currentHomeserver/_matrix/client/v3/sendToDevice/${cancellationRequest.eventType}/${System.currentTimeMillis()}") {
-                                                            bearerAuth(token)
-                                                            contentType(ContentType.Application.Json)
-                                                            // Parse the string body as JSON
-                                                            val body = convertMapToHashMap(cancellationRequest.body)
-                                                            if (body is Map<*, *>) {
-                                                                @Suppress("UNCHECKED_CAST")
-                                                                val mapBody = body as Map<String, Any>
-                                                                setBody(JsonObject(mapBody.mapValues { anyToJsonElement(it.value) }))
-                                                            } else if (body is String) {
-                                                                val parsedElement = json.parseToJsonElement(body)
-                                                                if (parsedElement is JsonObject) {
-                                                                    setBody(parsedElement)
-                                                                } else {
-                                                                    setBody(JsonObject(mapOf()))
-                                                                }
-                                                            }
-                                                        }
-                                                        if (cancelResponse.status == HttpStatusCode.OK) {
-                                                            println("✅ Key request cancellation sent")
-                                                        } else {
-                                                            // Don't treat cancellation failure as critical - just log it
-                                                            println("⚠️  Key request cancellation failed (status: ${cancelResponse.status}) - continuing with key request")
-                                                        }
-                                                    } catch (cancelException: Exception) {
-                                                        println("⚠️  Key request cancellation exception: ${cancelException.message} - continuing with key request")
-                                                    }
-                                                }
-                                                else -> {
-                                                    println("⚠️  Unexpected cancellation request type: ${cancellationRequest::class.simpleName}")
-                                                }
-                                            }
-                                        }
-
-                                        // Send the key request
+                                        // Send the key request (skip cancellation to avoid 400 errors)
                                         val keyRequest = keyRequestPair.keyRequest
                                         when (keyRequest) {
                                             is Request.ToDevice -> {
@@ -947,7 +906,7 @@ suspend fun sendMessage(roomId: String, message: String, skipEncryptionSetup: Bo
             println("� Validating encryption capability for room $roomId...")
             try {
                 // Test encryption with a dummy message to ensure it works
-                val testEncryption = machine.encrypt(roomId, "m.room.message", """{"body": "encryption_test", "msgtype": "m.text"}""")
+                machine.encrypt(roomId, "m.room.message", """{"body": "encryption_test", "msgtype": "m.text"}""")
                 println("✅ Encryption validation successful")
             } catch (validationError: Exception) {
                 println("❌ Encryption validation failed: ${validationError.message}")
