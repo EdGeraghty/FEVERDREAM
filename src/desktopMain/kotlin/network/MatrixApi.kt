@@ -676,7 +676,7 @@ suspend fun getRoomMessages(roomId: String): List<Event> {
                                     try {
                                         val eventJsonForKeyRequest = json.encodeToString(event)
                                         val keyRequestPair = machine.requestRoomKey(eventJsonForKeyRequest, roomId)
-                                        
+
                                         // Send a cancellation request first if it exists (for previous requests)
                                         val cancellationRequest = keyRequestPair.cancellation
                                         if (cancellationRequest != null) {
@@ -717,7 +717,7 @@ suspend fun getRoomMessages(roomId: String): List<Event> {
                                                 }
                                             }
                                         }
-                                        
+
                                         // Send the key request
                                         val keyRequest = keyRequestPair.keyRequest
                                         when (keyRequest) {
@@ -729,7 +729,7 @@ suspend fun getRoomMessages(roomId: String): List<Event> {
                                                         contentType(ContentType.Application.Json)
                                                         // Debug: Log the raw request body
                                                         println("🔍 Key request body: ${keyRequest.body}")
-                                                        
+
                                                         // Parse the string body as JSON
                                                         val body = convertMapToHashMap(keyRequest.body)
                                                         if (body is Map<*, *>) {
@@ -779,11 +779,11 @@ suspend fun getRoomMessages(roomId: String): List<Event> {
                                                 println("⚠️  Unexpected key request type: ${keyRequest::class.simpleName}")
                                             }
                                         }
-                                        
+
                                         // Sync again to process any incoming key responses
                                         println("🔄 Syncing again after key request...")
                                         syncAndProcessToDevice(10000UL) // Reduced timeout
-                                        
+
                                         // Try decryption again with the newly received keys
                                         try {
                                             val retryEventJson = json.encodeToString(event)
@@ -795,38 +795,44 @@ suspend fun getRoomMessages(roomId: String): List<Event> {
                                                 handleVerificationEvents = false,
                                                 strictShields = false
                                             )
-                                            
+
                                             // If retry succeeds, return the decrypted event
                                             val retryDecryptedContent = try {
                                                 json.parseToJsonElement(retryDecrypted.clearEvent)
                                             } catch (e: Exception) {
                                                 JsonPrimitive(retryDecrypted.clearEvent)
                                             }
-                                            
+
                                             val retryMessageContent = try {
                                                 json.decodeFromString<MessageContent>(json.encodeToString(retryDecryptedContent))
                                             } catch (e: Exception) {
                                                 MessageContent("m.text", retryDecrypted.clearEvent.trim('"'))
                                             }
-                                            
+
                                             val retryFinalContent = if (retryMessageContent.body.isNullOrBlank()) {
                                                 retryMessageContent.copy(body = retryDecrypted.clearEvent.trim('"'))
                                             } else {
                                                 retryMessageContent
                                             }
-                                            
+
                                             return@map event.copy(
                                                 type = "m.room.message",
                                                 content = json.parseToJsonElement(json.encodeToString(retryFinalContent))
                                             )
                                         } catch (retryException: Exception) {
                                             println("❌ Retry decryption also failed: ${retryException.message}")
-                                            // Fall through to return undecryptable event
+                                            // Fall through to return undecryptable event with better error message
                                         }
                                     } catch (keyRequestException: Exception) {
                                         println("❌ Key request failed: ${keyRequestException.message}")
-                                        // Fall through to return undecryptable event
+                                        // Fall through to return undecryptable event with better error message
                                     }
+
+                                    // Return event with improved error message for missing keys
+                                    return@map event.copy(
+                                        type = "m.room.message",
+                                        content = json.parseToJsonElement("""{"msgtype": "m.bad.encrypted", "body": "** Unable to decrypt: Room key not available. This message was sent before you joined or from another device. **"}""")
+                                    )
                                 }
                                 else -> {
                                     // Default case for other decryption failures
@@ -901,6 +907,10 @@ suspend fun sendMessage(roomId: String, message: String, skipEncryptionSetup: Bo
                             try {
                                 val renewalSuccess = crypto.ensureRoomEncryption(roomId)
                                 if (renewalSuccess) {
+                                    // CRITICAL FIX: Add delay after renewal to allow session to be fully established
+                                    println("⏳ Waiting for session renewal to complete...")
+                                    kotlinx.coroutines.delay(3000) // 3 second delay
+
                                     // Retry encryption with renewed session
                                     val retryEncryptedContent = machine.encrypt(roomId, "m.room.message", """{"body": "$message", "msgtype": "m.text"}""")
                                     finalContent = retryEncryptedContent
@@ -946,6 +956,10 @@ suspend fun sendMessage(roomId: String, message: String, skipEncryptionSetup: Bo
                         try {
                             val emergencySuccess = crypto.ensureRoomEncryption(roomId)
                             if (emergencySuccess) {
+                                // CRITICAL FIX: Add delay after emergency renewal
+                                println("⏳ Waiting for emergency session renewal to complete...")
+                                kotlinx.coroutines.delay(3000) // 3 second delay
+
                                 val emergencyEncryptedContent = machine.encrypt(roomId, "m.room.message", """{"body": "$message", "msgtype": "m.text"}""")
                                 finalContent = emergencyEncryptedContent
                                 eventType = "m.room.encrypted"

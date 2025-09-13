@@ -524,9 +524,24 @@ fun ChatScreen(
                                     style = MaterialTheme.typography.caption,
                                     color = if (isOwnMessage) MaterialTheme.colors.onPrimary else MaterialTheme.colors.onSurface
                                 )
-                                if (msgtype == "m.bad.encrypted" || body.contains("Can't find the room key")) {
+                                if (msgtype == "m.bad.encrypted") {
+                                    // Display different messages based on the error content
+                                    val displayText = when {
+                                        body.contains("Room key not available") -> {
+                                            "🔒 This message was sent before you joined the room or from another device. Room keys are not available."
+                                        }
+                                        body.contains("Session expired") -> {
+                                            "🔄 Session expired while decrypting. The message may be decryptable after refreshing."
+                                        }
+                                        body.contains("Can't find the room key") -> {
+                                            "🔑 Room key not found. Waiting for keys from other devices..."
+                                        }
+                                        else -> {
+                                            "🔐 Unable to decrypt message: ${body.replace("**", "").trim()}"
+                                        }
+                                    }
                                     Text(
-                                        "🔒 Encrypted message (waiting for room keys from other devices)",
+                                        displayText,
                                         color = MaterialTheme.colors.secondary,
                                         style = MaterialTheme.typography.body2
                                     )

@@ -33,8 +33,8 @@ suspend fun hasRoomKey(roomId: String): Boolean {
             return false
         }
 
-        // Also test if we can decrypt by creating and attempting to decrypt a test message
-        // This ensures we have both outbound and inbound capability
+        // Test if we can decrypt our own messages (basic crypto functionality test)
+        // Note: This doesn't guarantee we can decrypt messages from other devices
         val eventId = "\$test:${System.currentTimeMillis()}"
         val testEventJson = """{
             "type": "m.room.encrypted",
@@ -46,7 +46,7 @@ suspend fun hasRoomKey(roomId: String): Boolean {
         }"""
 
         val decryptionSettings = DecryptionSettings(senderDeviceTrustRequirement = TrustRequirement.UNTRUSTED)
-        val decrypted = machine.decryptRoomEvent(
+        machine.decryptRoomEvent(
             roomId = roomId,
             event = testEventJson,
             decryptionSettings = decryptionSettings,
@@ -54,8 +54,9 @@ suspend fun hasRoomKey(roomId: String): Boolean {
             strictShields = false
         )
 
-        // If we can decrypt our own test message, we have full room key capability
-        println("✅ Room key test successful - can encrypt and decrypt")
+        // If we can decrypt our own test message, basic crypto is working
+        // This doesn't mean we have keys for messages from other devices
+        println("✅ Basic crypto test successful - can encrypt/decrypt own messages")
         true
     } catch (e: Exception) {
         // Handle session expiration gracefully instead of letting it panic
@@ -66,13 +67,26 @@ suspend fun hasRoomKey(roomId: String): Boolean {
             try {
                 val renewalSuccess = ensureRoomEncryption(roomId)
                 if (renewalSuccess) {
-                    // Test again after comprehensive renewal
+                    // CRITICAL FIX: Add delay after renewal to allow session to be fully established
+                    println("⏳ Waiting for session renewal to complete...")
+                    kotlinx.coroutines.delay(3000) // 3 second delay
+
+                    // Test encryption again to ensure session is truly ready
+                    try {
+                        machine.encrypt(roomId, "m.room.message", """{"msgtype": "m.text", "body": "final_test"}""")
+                        println("✅ Session fully ready after renewal")
+                    } catch (finalTestException: Exception) {
+                        println("⚠️  Session still not ready after delay: ${finalTestException.message}")
+                        return false
+                    }
+
+                    // Test again after comprehensive renewal and delay
                     return try {
                         machine.encrypt(roomId, "m.room.message", """{"msgtype": "m.text", "body": "test_after_renewal"}""")
-                        println("✅ Session renewal successful")
+                        println("✅ Session renewal successful with delay")
                         true
                     } catch (retryException: Exception) {
-                        println("⚠️  Session renewal verification failed: ${retryException.message}")
+                        println("⚠️  Session renewal verification failed after delay: ${retryException.message}")
                         false
                     }
                 } else {
@@ -84,9 +98,9 @@ suspend fun hasRoomKey(roomId: String): Boolean {
                 return false
             }
         } else {
-            println("⚠️  Room key test failed: ${e.message}")
+            println("⚠️  Basic crypto test failed: ${e.message}")
+            false
         }
-        false
     }
 }
 
@@ -105,10 +119,28 @@ suspend fun canEncryptRoom(roomId: String): Boolean {
                 // Use the comprehensive ensureRoomEncryption function
                 val renewalSuccess = ensureRoomEncryption(roomId)
                 if (renewalSuccess) {
-                    // Test again after comprehensive renewal
-                    machine.encrypt(roomId, "m.room.message", """{"msgtype": "m.text", "body": "test"}""")
-                    println("✅ Session renewed successfully via ensureRoomEncryption")
-                    return true
+                    // CRITICAL FIX: Add delay after renewal to allow session to be fully established
+                    println("⏳ Waiting for session renewal to complete...")
+                    kotlinx.coroutines.delay(5000) // 5 second delay
+
+                    // Test encryption again to ensure session is truly ready
+                    try {
+                        machine.encrypt(roomId, "m.room.message", """{"msgtype": "m.text", "body": "final_test"}""")
+                        println("✅ Session fully ready after renewal")
+                    } catch (finalTestException: Exception) {
+                        println("⚠️  Session still not ready after delay: ${finalTestException.message}")
+                        return false
+                    }
+
+                    // Test again after comprehensive renewal and delay
+                    return try {
+                        machine.encrypt(roomId, "m.room.message", """{"msgtype": "m.text", "body": "test_after_renewal"}""")
+                        println("✅ Session renewed successfully with delay")
+                        true
+                    } catch (retryException: Exception) {
+                        println("⚠️  Session renewal verification failed after delay: ${retryException.message}")
+                        false
+                    }
                 } else {
                     println("❌ Comprehensive session renewal failed")
                     return false
