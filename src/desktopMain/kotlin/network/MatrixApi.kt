@@ -924,106 +924,36 @@ suspend fun sendMessage(roomId: String, message: String, skipEncryptionSetup: Bo
                 println("🔐 Ensuring encryption setup for room $roomId before sending...")
                 val encryptionSetup = ensureRoomEncryption(roomId)
                 if (!encryptionSetup) {
-                    println("⚠️  Failed to set up encryption, sending as plain text")
-                    val requestBody = SendMessageRequest(body = message)
-                    finalContent = json.encodeToString(requestBody)
-                    eventType = "m.room.message"
-                } else {
-                    // Encrypt the message
-                    println("🔐 Encrypting message for room $roomId")
-                    try {
-                        val encryptedContent = machine.encrypt(roomId, "m.room.message", """{"body": "$message", "msgtype": "m.text"}""")
-                        finalContent = encryptedContent // Don't double-encode - OlmMachine already returns JSON string
-                        eventType = "m.room.encrypted"
-                        println("✅ Message encrypted successfully")
-                        println("🔐 Encrypted content: $finalContent")
-                    } catch (encryptError: Exception) {
-                        println("❌ Message encryption failed: ${encryptError.message}")
-
-                        // Handle session expiration specifically
-                        if (encryptError.message?.contains("Session expired") == true || encryptError.message?.contains("panicked") == true) {
-                            println("⚠️  Session expired during encryption, attempting comprehensive renewal...")
-
-                            // Use the comprehensive ensureRoomEncryption function
-                            try {
-                                val renewalSuccess = crypto.ensureRoomEncryption(roomId)
-                                if (renewalSuccess) {
-                                    // CRITICAL FIX: Add delay after renewal to allow session to be fully established
-                                    println("⏳ Waiting for session renewal to complete...")
-                                    kotlinx.coroutines.delay(3000) // 3 second delay
-
-                                    // Retry encryption with renewed session
-                                    val retryEncryptedContent = machine.encrypt(roomId, "m.room.message", """{"body": "$message", "msgtype": "m.text"}""")
-                                    finalContent = retryEncryptedContent
-                                    eventType = "m.room.encrypted"
-                                    println("✅ Message encrypted successfully after comprehensive session renewal")
-                                } else {
-                                    println("❌ Comprehensive session renewal failed, sending as plain text")
-                                    val requestBody = SendMessageRequest(body = message)
-                                    finalContent = json.encodeToString(requestBody)
-                                    eventType = "m.room.message"
-                                }
-                            } catch (renewalException: Exception) {
-                                println("❌ Session renewal failed: ${renewalException.message}, sending as plain text")
-                                val requestBody = SendMessageRequest(body = message)
-                                finalContent = json.encodeToString(requestBody)
-                                eventType = "m.room.message"
-                            }
-                        } else {
-                            // Fallback to plain text for other encryption errors
-                            val requestBody = SendMessageRequest(body = message)
-                            finalContent = json.encodeToString(requestBody)
-                            eventType = "m.room.message"
-                        }
-                    }
+                    println("⚠️  Failed to set up encryption, cannot send encrypted message to encrypted room")
+                    println("❌ Message not sent - encryption setup failed for encrypted room")
+                    return false // Don't send the message if encryption setup fails
                 }
-            } else {
-                // Skip encryption setup - encrypt directly
-                println("🔐 Encrypting message for room $roomId (skipping setup check)")
-                try {
-                    val encryptedContent = machine.encrypt(roomId, "m.room.message", """{"body": "$message", "msgtype": "m.text"}""")
-                    finalContent = encryptedContent // Don't double-encode
-                    eventType = "m.room.encrypted"
-                    println("✅ Message encrypted successfully (setup skipped)")
-                    println("🔐 Encrypted content: $finalContent")
-                } catch (encryptError: Exception) {
-                    println("❌ Message encryption failed: ${encryptError.message}")
+            }
 
-                    // Handle session expiration even when skipping setup
-                    if (encryptError.message?.contains("Session expired") == true || encryptError.message?.contains("panicked") == true) {
-                        println("⚠️  Session expired during encryption, attempting emergency renewal...")
+            // Validate that encryption is working before sending
+            println("� Validating encryption capability for room $roomId...")
+            try {
+                // Test encryption with a dummy message to ensure it works
+                val testEncryption = machine.encrypt(roomId, "m.room.message", """{"body": "encryption_test", "msgtype": "m.text"}""")
+                println("✅ Encryption validation successful")
+            } catch (validationError: Exception) {
+                println("❌ Encryption validation failed: ${validationError.message}")
+                println("❌ Cannot send message - encryption not working for room")
+                return false
+            }
 
-                        // Emergency session renewal - use comprehensive approach
-                        try {
-                            val emergencySuccess = crypto.ensureRoomEncryption(roomId)
-                            if (emergencySuccess) {
-                                // CRITICAL FIX: Add delay after emergency renewal
-                                println("⏳ Waiting for emergency session renewal to complete...")
-                                kotlinx.coroutines.delay(3000) // 3 second delay
-
-                                val emergencyEncryptedContent = machine.encrypt(roomId, "m.room.message", """{"body": "$message", "msgtype": "m.text"}""")
-                                finalContent = emergencyEncryptedContent
-                                eventType = "m.room.encrypted"
-                                println("✅ Emergency encryption successful")
-                            } else {
-                                println("❌ Emergency renewal failed, sending as plain text")
-                                val requestBody = SendMessageRequest(body = message)
-                                finalContent = json.encodeToString(requestBody)
-                                eventType = "m.room.message"
-                            }
-                        } catch (emergencyException: Exception) {
-                            println("❌ Emergency renewal failed: ${emergencyException.message}")
-                            val requestBody = SendMessageRequest(body = message)
-                            finalContent = json.encodeToString(requestBody)
-                            eventType = "m.room.message"
-                        }
-                    } else {
-                        // Fallback to plain text
-                        val requestBody = SendMessageRequest(body = message)
-                        finalContent = json.encodeToString(requestBody)
-                        eventType = "m.room.message"
-                    }
-                }
+            // Encrypt the actual message
+            println("🔐 Encrypting message for room $roomId")
+            try {
+                val encryptedContent = machine.encrypt(roomId, "m.room.message", """{"body": "$message", "msgtype": "m.text"}""")
+                finalContent = encryptedContent // Don't double-encode - OlmMachine already returns JSON string
+                eventType = "m.room.encrypted"
+                println("✅ Message encrypted successfully")
+                println("🔐 Encrypted content: $finalContent")
+            } catch (encryptError: Exception) {
+                println("❌ Message encryption failed: ${encryptError.message}")
+                println("❌ Cannot send message - encryption failed for encrypted room")
+                return false // Don't send the message if encryption fails
             }
         } else {
             // Send as plain text
