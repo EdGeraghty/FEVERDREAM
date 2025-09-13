@@ -53,7 +53,7 @@
 	Added validation to check for required fields (algorithm and ciphertext) in encrypted events before attempting decryption. Prevents "missing field `algorithm`" errors from malformed events with empty content.
 
 - [x] Fix UI Loading Wheel Issue
-	Resolved loading wheel that persisted after room data was loaded. Issue was caused by blocking network calls (runBlocking) in composable functions. Fixed by loading encryption status asynchronously during room loading instead of blocking the UI thread.
+	Resolved loading wheel that persisted after room data was loaded. Issue was caused by blocking network calls (runBlocking) in composable functions. Fixed by loading encryption status asynchronously during room loading instead of blocking the UI thread. Also improved message loading to check cache first and handle exceptions properly.
 
 - [ ] Implement Key Backup (Future Enhancement)
 	Key backup functionality identified but not yet implemented. Would allow devices to backup and restore room keys for cross-device message decryption.

@@ -57,32 +57,46 @@ fun ChatWindow(
 
     LaunchedEffect(roomId) {
         scope.launch {
-            println("🔄 ChatWindow: Loading messages for room $roomId")
-            // ensureRoomEncryption call - too slow for UI initialization
-            // Only set up encryption when actually sending a message
-            messages = getRoomMessages(roomId)
-            println("✅ ChatWindow: Loaded ${messages.size} messages for room $roomId")
-            isLoading = false
-            println("✅ ChatWindow: Loading complete, isLoading = false")
-
-            // Proactively ensure encryption is set up for this room
-            // This creates a fresh outbound session so future messages can be encrypted/decrypted
-            scope.launch {
-                try {
-                    println("🔐 Proactively setting up encryption for room $roomId")
-                    val encryptionResult = withTimeout(15000L) { // 15 second timeout
-                        crypto.ensureRoomEncryption(roomId)
-                    }
-                    if (encryptionResult) {
-                        println("✅ Proactive encryption setup successful for room $roomId")
-                    } else {
-                        println("⚠️  Proactive encryption setup failed for room $roomId")
-                    }
-                } catch (e: TimeoutCancellationException) {
-                    println("❌ Proactive encryption setup timed out for room $roomId")
-                } catch (e: Exception) {
-                    println("⚠️  Proactive encryption setup failed: ${e.message}")
+            try {
+                println("🔄 ChatWindow: Loading messages for room $roomId")
+                // Check cache first
+                val cachedMessages = crypto.roomMessageCache[roomId]
+                if (cachedMessages != null && cachedMessages.isNotEmpty()) {
+                    println("📋 ChatWindow: Using cached messages: ${cachedMessages.size}")
+                    messages = cachedMessages.toList()
+                    isLoading = false
+                    println("✅ ChatWindow: Loading complete from cache, isLoading = false")
+                } else {
+                    // ensureRoomEncryption call - too slow for UI initialization
+                    // Only set up encryption when actually sending a message
+                    messages = getRoomMessages(roomId)
+                    println("✅ ChatWindow: Loaded ${messages.size} messages for room $roomId")
+                    isLoading = false
+                    println("✅ ChatWindow: Loading complete, isLoading = false")
                 }
+
+                // Proactively ensure encryption is set up for this room
+                // This creates a fresh outbound session so future messages can be encrypted/decrypted
+                scope.launch {
+                    try {
+                        println("🔐 Proactively setting up encryption for room $roomId")
+                        val encryptionResult = withTimeout(15000L) { // 15 second timeout
+                            crypto.ensureRoomEncryption(roomId)
+                        }
+                        if (encryptionResult) {
+                            println("✅ Proactive encryption setup successful for room $roomId")
+                        } else {
+                            println("⚠️  Proactive encryption setup failed for room $roomId")
+                        }
+                    } catch (e: TimeoutCancellationException) {
+                        println("❌ Proactive encryption setup timed out for room $roomId")
+                    } catch (e: Exception) {
+                        println("⚠️  Proactive encryption setup failed: ${e.message}")
+                    }
+                }
+            } catch (e: Exception) {
+                println("❌ Error loading messages: ${e.message}")
+                isLoading = false
             }
         }
     }
