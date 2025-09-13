@@ -6,7 +6,7 @@ import io.ktor.client.request.*
 import io.ktor.http.*
 import kotlinx.serialization.json.JsonObject
 import models.*
-import kotlinx.serialization.json.Json
+import network.NetworkClient.json
 
 /**
  * Authentication API functions for Matrix client
@@ -185,7 +185,7 @@ suspend fun login(username: String, password: String, homeserver: String): Login
 
             val response = client.post("$finalHomeserver/_matrix/client/v3/login") {
                 contentType(ContentType.Application.Json)
-                setBody(Json.encodeToString(LoginRequestV2.serializer(), loginRequest))
+                setBody(json.encodeToString(loginRequest))
             }
 
             println("📥 Login response: ${response.status}")
@@ -226,7 +226,7 @@ suspend fun login(username: String, password: String, homeserver: String): Login
 
                         val oldResponse = client.post("$finalHomeserver/_matrix/client/v3/login") {
                             contentType(ContentType.Application.Json)
-                            setBody(Json.encodeToString(LoginRequest.serializer(), oldLoginRequest))
+                            setBody(json.encodeToString(oldLoginRequest))
                         }
 
                         if (oldResponse.status == HttpStatusCode.OK) {
@@ -283,7 +283,7 @@ suspend fun login(username: String, password: String, homeserver: String): Login
 
                 val fallbackResponse = client.post("$cleanHomeserver/_matrix/client/v3/login") {
                     contentType(ContentType.Application.Json)
-                    setBody(Json.encodeToString(LoginRequestV2.serializer(), fallbackRequest))
+                    setBody(json.encodeToString(fallbackRequest))
                 }
 
                 println("📥 Fallback login response: ${fallbackResponse.status}")
