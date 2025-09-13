@@ -5,6 +5,15 @@
 			"label": "build",
 			"type": "shell",
 			"command": "./gradlew build"
+		},
+		{
+			"label": "run",
+			"type": "shell",
+			"command": "./gradlew run",
+			"args": [],
+			"isBackground": true,
+			"problemMatcher": [],
+			"group": "build"
 		}
 	]
 }

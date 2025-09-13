@@ -60,7 +60,9 @@ fun MatrixApp(windowManager: WindowManager) {
                                 // Start periodic sync only if not already running
                                 if (!isPeriodicSyncRunning) {
                                     isPeriodicSyncRunning = true
-                                    appScope.launch { crypto.startPeriodicSync() }
+                                    // Temporarily disable periodic sync to prevent continuous panics
+                                    // appScope.launch { crypto.startPeriodicSync() }
+                                    println("🔄 Periodic sync disabled for debugging")
                                 }
                             } else {
                                 loginError = "Login failed"
