@@ -544,15 +544,47 @@ suspend fun getRoomMessages(roomId: String): List<Event> {
                                 recentlyRequestedKeys[keyRequestId] = currentTime
                             }
 
-                            // Debug: Check if we have the room key
-                            val hasKey = hasRoomKey(roomId)
-                            println("🔑 Room $roomId has key: $hasKey")
+                            // More defensive approach: Check session validity before attempting decryption
+                            val hasValidKey = try {
+                                hasRoomKey(roomId)
+                            } catch (e: Exception) {
+                                println("⚠️  Error checking room key validity: ${e.message}")
+                                false
+                            }
+
+                            if (!hasValidKey) {
+                                println("⚠️  No valid room key available, skipping decryption attempt")
+                                // Return event with key missing marker without attempting decryption
+                                return@map event.copy(
+                                    type = "m.room.message",
+                                    content = json.parseToJsonElement("""{"msgtype": "m.bad.encrypted", "body": "** Unable to decrypt: Room key not available **"}""")
+                                )
+                            }
 
                             val eventJson = json.encodeToString(event)
                             val decryptionSettings = DecryptionSettings(senderDeviceTrustRequirement = TrustRequirement.UNTRUSTED)
 
-                            // Wrap decryption in try-catch to handle session expiration panics
+                            // Use a safer decryption approach that avoids panics
                             val decrypted = try {
+                                // First, try to validate the event structure to avoid malformed event panics
+                                val eventObj = json.parseToJsonElement(eventJson)
+                                if (eventObj !is JsonObject) {
+                                    throw Exception("Invalid event structure")
+                                }
+
+                                val content = eventObj["content"]
+                                if (content !is JsonObject) {
+                                    throw Exception("Invalid event content structure")
+                                }
+
+                                val algorithm = content["algorithm"]?.toString()?.trim('"')
+                                val ciphertext = content["ciphertext"]
+
+                                if (algorithm.isNullOrBlank() || ciphertext == null) {
+                                    throw Exception("Missing required encryption fields")
+                                }
+
+                                // Only attempt decryption if we have valid structure
                                 machine.decryptRoomEvent(
                                     roomId = roomId,
                                     event = eventJson,
@@ -561,35 +593,17 @@ suspend fun getRoomMessages(roomId: String): List<Event> {
                                     strictShields = false
                                 )
                             } catch (e: Exception) {
-                                // Handle session expiration panics gracefully
-                                if (e.message?.contains("Session expired") == true || e.message?.contains("panicked") == true) {
-                                    println("⚠️  Session expired during decryption, attempting to renew...")
-
-                                    // Call hasRoomKey to trigger session renewal
-                                    val renewed = hasRoomKey(roomId)
-                                    if (renewed) {
-                                        println("✅ Session renewed, retrying decryption...")
-
-                                        // Add small delay to allow renewal to complete
-                                        kotlinx.coroutines.delay(1000)
-
-                                        // Retry decryption with renewed session
-                                        try {
-                                            machine.decryptRoomEvent(
-                                                roomId = roomId,
-                                                event = eventJson,
-                                                decryptionSettings = decryptionSettings,
-                                                handleVerificationEvents = false,
-                                                strictShields = false
-                                            )
-                                        } catch (retryException: Exception) {
-                                            println("❌ Retry decryption failed: ${retryException.message}")
-                                            throw Exception("Session expired - decryption failed after renewal")
-                                        }
-                                    } else {
-                                        println("❌ Session renewal failed")
-                                        throw Exception("Session expired - decryption failed")
-                                    }
+                                // Handle all decryption failures gracefully
+                                if (e.message?.contains("Session expired") == true ||
+                                    e.message?.contains("panicked") == true ||
+                                    e.message?.contains("Invalid event structure") == true ||
+                                    e.message?.contains("Missing required encryption fields") == true) {
+                                    println("⚠️  Decryption not possible: ${e.message}")
+                                    // Return event with appropriate error marker
+                                    return@map event.copy(
+                                        type = "m.room.message",
+                                        content = json.parseToJsonElement("""{"msgtype": "m.bad.encrypted", "body": "** Unable to decrypt: ${e.message} **"}""")
+                                    )
                                 } else {
                                     throw e
                                 }
