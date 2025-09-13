@@ -1230,7 +1230,7 @@ suspend fun hasRoomKey(roomId: String): Boolean {
                 for (request in newSessionRequests) {
                     when (request) {
                         is Request.ToDevice -> {
-                            val token = currentAccessToken ?: continue
+                            val token = currentAccessToken ?: return false
                             try {
                                 val response = client.put("$currentHomeserver/_matrix/client/v3/sendToDevice/${request.eventType}/${System.currentTimeMillis()}") {
                                     bearerAuth(token)
@@ -1289,12 +1289,72 @@ suspend fun hasRoomKey(roomId: String): Boolean {
 }
 
 // Public function to check if we can encrypt messages for a room
-fun canEncryptRoom(roomId: String): Boolean {
+suspend fun canEncryptRoom(roomId: String): Boolean {
     val machine = olmMachine ?: return false
     return try {
         machine.encrypt(roomId, "m.room.message", """{"msgtype": "m.text", "body": "test"}""")
         true
     } catch (e: Exception) {
-        false
+        println("⚠️  Encryption test failed: ${e.message}")
+        // Try to renew session if it failed
+        if (e.message?.contains("Session expired") == true || e.message?.contains("panicked") == true) {
+            println("🔄 Attempting session renewal in canEncryptRoom...")
+            try {
+                // Force session renewal
+                val encryptionSettings = EncryptionSettings(
+                    algorithm = EventEncryptionAlgorithm.MEGOLM_V1_AES_SHA2,
+                    rotationPeriod = 604800000UL,
+                    rotationPeriodMsgs = 100UL,
+                    historyVisibility = HistoryVisibility.SHARED,
+                    onlyAllowTrustedDevices = false,
+                    errorOnVerifiedUserProblem = false
+                )
+
+                val renewalRequests = machine.shareRoomKey(roomId, emptyList(), encryptionSettings)
+                println("🔄 Created ${renewalRequests.size} renewal requests")
+
+                // Send renewal requests
+                for (request in renewalRequests) {
+                    when (request) {
+                        is Request.ToDevice -> {
+                            val token = currentAccessToken ?: return false
+                            val response = client.put("$currentHomeserver/_matrix/client/v3/sendToDevice/${request.eventType}/${System.currentTimeMillis()}") {
+                                bearerAuth(token)
+                                contentType(ContentType.Application.Json)
+                                val body = convertMapToHashMap(request.body)
+                                if (body is Map<*, *>) {
+                                    @Suppress("UNCHECKED_CAST")
+                                    val mapBody = body as Map<String, Any>
+                                    val jsonBody = JsonObject(mapBody.mapValues { anyToJsonElement(it.value) })
+                                    val messagesWrapper = JsonObject(mapOf("messages" to jsonBody))
+                                    setBody(messagesWrapper)
+                                }
+                            }
+                            if (response.status == HttpStatusCode.OK) {
+                                println("✅ Session renewal request sent")
+                            }
+                        }
+                        else -> {
+                            println("⚠️  Unhandled renewal request type: ${request::class.simpleName}")
+                        }
+                    }
+                }
+
+                // Quick sync to process renewal
+                kotlinx.coroutines.runBlocking {
+                    syncAndProcessToDevice(2000UL)
+                }
+
+                // Test again
+                machine.encrypt(roomId, "m.room.message", """{"msgtype": "m.text", "body": "test"}""")
+                println("✅ Session renewed successfully")
+                true
+            } catch (renewalException: Exception) {
+                println("❌ Session renewal failed: ${renewalException.message}")
+                false
+            }
+        } else {
+            false
+        }
     }
 }
