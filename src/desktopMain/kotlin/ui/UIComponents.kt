@@ -11,11 +11,10 @@ import crypto.*
 sealed class Screen {
     object Login : Screen()
     object Rooms : Screen()
-    data class Chat(val roomId: String) : Screen()
 }
 
 @Composable
-fun MatrixApp() {
+fun MatrixApp(windowManager: WindowManager) {
     // Use GlobalScope for long-running operations to avoid composition cancellation
     val appScope = remember { kotlinx.coroutines.GlobalScope }
     var currentScreen by remember { mutableStateOf<Screen>(Screen.Login) }
@@ -77,7 +76,9 @@ fun MatrixApp() {
                 isLoading = isLoading
             )
             is Screen.Rooms -> RoomsScreen(
-                onRoomSelected = { roomId -> currentScreen = Screen.Chat(roomId) },
+                onRoomSelected = { roomId ->
+                    windowManager.openChatWindow(roomId)
+                },
                 onLogout = {
                     appScope.launch {
                         clearSession()
@@ -98,15 +99,9 @@ fun MatrixApp() {
                         isPeriodicSyncRunning = false  // Reset periodic sync flag
                         currentScreen = Screen.Login
                     }
-                }
+                },
+                windowManager = windowManager
             )
-            is Screen.Chat -> {
-                val roomId = (currentScreen as Screen.Chat).roomId
-                ChatScreen(
-                    roomId = roomId,
-                    onBack = { currentScreen = Screen.Rooms }
-                )
-            }
         }
     }
 }

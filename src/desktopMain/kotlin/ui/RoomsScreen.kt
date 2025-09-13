@@ -18,7 +18,8 @@ import crypto.*
 @Composable
 fun RoomsScreen(
     onRoomSelected: (String) -> Unit,
-    onLogout: () -> Unit
+    onLogout: () -> Unit,
+    windowManager: WindowManager? = null
 ) {
     // Use GlobalScope for long-running operations
     val scope = remember { kotlinx.coroutines.GlobalScope }
@@ -133,12 +134,14 @@ fun RoomsScreen(
                     Text("Joined Rooms", style = MaterialTheme.typography.h6, modifier = Modifier.padding(16.dp))
                 }
                 items(rooms) { roomId ->
+                    val isChatWindowOpen = windowManager?.isChatWindowOpen(roomId) ?: false
                     Card(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(horizontal = 16.dp, vertical = 4.dp)
                             .clickable { onRoomSelected(roomId) },
-                        elevation = 4.dp
+                        elevation = 4.dp,
+                        backgroundColor = if (isChatWindowOpen) MaterialTheme.colors.primary.copy(alpha = 0.1f) else MaterialTheme.colors.surface
                     ) {
                         Row(
                             modifier = Modifier
@@ -152,6 +155,10 @@ fun RoomsScreen(
                                 val isEncrypted = roomEncryptionStatus[roomId] ?: false
                                 if (isEncrypted) {
                                     Text("🔒 Encrypted", style = MaterialTheme.typography.caption, color = MaterialTheme.colors.primary)
+                                }
+                                // Show chat window status
+                                if (isChatWindowOpen) {
+                                    Text("💬 Chat open", style = MaterialTheme.typography.caption, color = MaterialTheme.colors.secondary)
                                 }
                             }
                             Icon(Icons.Default.ArrowForward, contentDescription = "Enter room")
