@@ -78,31 +78,54 @@ suspend fun getRoomMessages(roomId: String, skipDecryption: Boolean = false): Li
             val decryptedMessages = allMessages.map { event ->
                 if (event.type == "m.room.encrypted") {
                     try {
-                        // Use proper OlmMachine decryption
-                        val decryptionSettings = uniffi.matrix_sdk_crypto.DecryptionSettings(
-                            senderDeviceTrustRequirement = uniffi.matrix_sdk_crypto.TrustRequirement.UNTRUSTED
-                        )
-                        val decryptedEvent = machine.decryptRoomEvent(
-                            roomId = roomId,
-                            event = JsonObject(mapOf(
-                                "type" to JsonPrimitive(event.type),
-                                "event_id" to JsonPrimitive(event.event_id),
-                                "sender" to JsonPrimitive(event.sender),
-                                "origin_server_ts" to JsonPrimitive(event.origin_server_ts),
-                                "content" to event.content
-                            )).toString(),
-                            decryptionSettings = decryptionSettings,
-                            handleVerificationEvents = false,
-                            strictShields = false
-                        )
-                        // Parse the decrypted event from the clearEvent field
-                        val clearEventJson = decryptedEvent.clearEvent
-                        val clearEvent = json.parseToJsonElement(clearEventJson).jsonObject
-                        // Return the decrypted event with proper type and content
-                        event.copy(
-                            type = clearEvent["type"]?.jsonPrimitive?.content ?: "m.room.message",
-                            content = clearEvent["content"] ?: JsonObject(emptyMap())
-                        )
+                        // Validate that the encrypted event has required fields
+                        val content = event.content
+                        if (content is JsonObject) {
+                            val algorithm = content["algorithm"]?.jsonPrimitive?.content
+                            val ciphertext = content["ciphertext"]?.jsonPrimitive?.content
+
+                            if (algorithm.isNullOrEmpty() || ciphertext.isNullOrEmpty()) {
+                                println("⚠️  Malformed encrypted event ${event.event_id}: missing algorithm or ciphertext field")
+                                // Return undecryptable message for malformed events
+                                event.copy(
+                                    type = "m.room.message",
+                                    content = json.parseToJsonElement("""{"msgtype": "m.bad.encrypted", "body": "** Unable to decrypt: Malformed encrypted event (missing algorithm or ciphertext) **"}""")
+                                )
+                            } else {
+                                // Use proper OlmMachine decryption
+                                val decryptionSettings = uniffi.matrix_sdk_crypto.DecryptionSettings(
+                                    senderDeviceTrustRequirement = uniffi.matrix_sdk_crypto.TrustRequirement.UNTRUSTED
+                                )
+                                val decryptedEvent = machine.decryptRoomEvent(
+                                    roomId = roomId,
+                                    event = JsonObject(mapOf(
+                                        "type" to JsonPrimitive(event.type),
+                                        "event_id" to JsonPrimitive(event.event_id),
+                                        "sender" to JsonPrimitive(event.sender),
+                                        "origin_server_ts" to JsonPrimitive(event.origin_server_ts),
+                                        "content" to event.content
+                                    )).toString(),
+                                    decryptionSettings = decryptionSettings,
+                                    handleVerificationEvents = false,
+                                    strictShields = false
+                                )
+                                // Parse the decrypted event from the clearEvent field
+                                val clearEventJson = decryptedEvent.clearEvent
+                                val clearEvent = json.parseToJsonElement(clearEventJson).jsonObject
+                                // Return the decrypted event with proper type and content
+                                event.copy(
+                                    type = clearEvent["type"]?.jsonPrimitive?.content ?: "m.room.message",
+                                    content = clearEvent["content"] ?: JsonObject(emptyMap())
+                                )
+                            }
+                        } else {
+                            println("⚠️  Malformed encrypted event ${event.event_id}: content is not a JsonObject")
+                            // Return undecryptable message for malformed events
+                            event.copy(
+                                type = "m.room.message",
+                                content = json.parseToJsonElement("""{"msgtype": "m.bad.encrypted", "body": "** Unable to decrypt: Malformed encrypted event (invalid content format) **"}""")
+                            )
+                        }
                     } catch (e: Exception) {
                         println("⚠️  Failed to decrypt event ${event.event_id}: ${e.message}")
                         // Return undecryptable message with specific error
