@@ -77,11 +77,40 @@ suspend fun getRoomMessages(roomId: String, skipDecryption: Boolean = false): Li
 
             val decryptedMessages = allMessages.map { event ->
                 if (event.type == "m.room.encrypted") {
-                    // Simple decryption - mark as undecryptable for now
-                    event.copy(
-                        type = "m.room.message",
-                        content = json.parseToJsonElement("""{"msgtype": "m.bad.encrypted", "body": "** Unable to decrypt: Encryption not implemented **"}""")
-                    )
+                    try {
+                        // Use proper OlmMachine decryption
+                        val decryptionSettings = uniffi.matrix_sdk_crypto.DecryptionSettings(
+                            senderDeviceTrustRequirement = uniffi.matrix_sdk_crypto.TrustRequirement.UNTRUSTED
+                        )
+                        val decryptedEvent = machine.decryptRoomEvent(
+                            roomId = roomId,
+                            event = json.encodeToString(event),
+                            decryptionSettings = decryptionSettings,
+                            handleVerificationEvents = false,
+                            strictShields = false
+                        )
+                        // Parse the decrypted event from the clearEvent field
+                        val clearEventJson = decryptedEvent.clearEvent
+                        val clearEvent = json.parseToJsonElement(clearEventJson).jsonObject
+                        // Return the decrypted event with proper type and content
+                        event.copy(
+                            type = clearEvent["type"]?.jsonPrimitive?.content ?: "m.room.message",
+                            content = clearEvent["content"] ?: JsonObject(emptyMap())
+                        )
+                    } catch (e: Exception) {
+                        println("⚠️  Failed to decrypt event ${event.event_id}: ${e.message}")
+                        // Return undecryptable message with specific error
+                        val errorMessage = when {
+                            e.message?.contains("Session expired") == true -> "** Unable to decrypt: Session expired **"
+                            e.message?.contains("Room key not available") == true -> "** Unable to decrypt: Room key not available **"
+                            e.message?.contains("Can't find the room key") == true -> "** Unable to decrypt: Can't find the room key **"
+                            else -> "** Unable to decrypt: ${e.message} **"
+                        }
+                        event.copy(
+                            type = "m.room.message",
+                            content = json.parseToJsonElement("""{"msgtype": "m.bad.encrypted", "body": "$errorMessage"}""")
+                        )
+                    }
                 } else {
                     event
                 }

@@ -186,9 +186,11 @@ fun RoomsScreen(
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(roomId)
                                 // Show encryption status
-                                val isEncrypted = roomEncryptionStatus[roomId] ?: false
-                                if (isEncrypted) {
-                                    Text("🔒 Encrypted", style = MaterialTheme.typography.caption, color = MaterialTheme.colors.primary)
+                                val isEncrypted = roomEncryptionStatus[roomId]
+                                when (isEncrypted) {
+                                    true -> Text("🔒 Encrypted", style = MaterialTheme.typography.caption, color = MaterialTheme.colors.primary)
+                                    false -> Text("Not encrypted", style = MaterialTheme.typography.caption, color = MaterialTheme.colors.secondary)
+                                    null -> Text("Checking encryption...", style = MaterialTheme.typography.caption, color = MaterialTheme.colors.onSurface.copy(alpha = 0.5f))
                                 }
                                 // Show chat window status
                                 if (isChatWindowOpen) {
