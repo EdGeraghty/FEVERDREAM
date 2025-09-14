@@ -34,6 +34,19 @@ fun SettingsWindow(windowManager: WindowManager) {
 
 @Composable
 fun LoginWindow(onLoginSuccess: () -> Unit) {
+    // Load existing session on startup to reuse device ID
+    LaunchedEffect(Unit) {
+        val session = loadSession()
+        if (session != null && validateSession(session)) {
+            currentUserId = session.userId
+            currentDeviceId = session.deviceId
+            currentAccessToken = session.accessToken
+            currentHomeserver = session.homeserver
+            currentSyncToken = session.syncToken
+            println("📂 Existing session loaded, will reuse device ID: ${currentDeviceId}")
+        }
+    }
+
     // Use rememberCoroutineScope for composition-aware coroutines
     val scope = rememberCoroutineScope()
     var loginError by remember { mutableStateOf<String?>(null) }

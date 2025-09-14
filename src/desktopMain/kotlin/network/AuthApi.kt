@@ -168,23 +168,30 @@ suspend fun login(username: String, password: String, homeserver: String): Login
         val finalHomeserver = actualHomeserver
         currentHomeserver = finalHomeserver
 
+        // Check if we have an existing device ID to reuse (from previous session)
+        val deviceIdToUse = currentDeviceId
+
         println("🔍 Login attempt:")
         println("   User: $userId")
         println("   Server: $finalHomeserver")
         println("   Auto-detected: ${cleanUsername.contains(":")}")
+        if (deviceIdToUse != null) {
+            println("   Reusing device ID: $deviceIdToUse")
+        }
 
         // Try login with the determined homeserver
         try {
-            val loginRequest = LoginRequestV2(
-                identifier = Identifier(user = userId),
-                password = password
-            )
+            val loginRequestBody = if (deviceIdToUse != null) {
+                """{"type":"m.login.password","identifier":{"type":"m.id.user","user":"$userId"},"password":"$password","device_id":"$deviceIdToUse"}"""
+            } else {
+                """{"type":"m.login.password","identifier":{"type":"m.id.user","user":"$userId"},"password":"$password"}"""
+            }
 
             println("📤 Sending login request...")
 
             val response = client.post("$finalHomeserver/_matrix/client/v3/login") {
                 contentType(ContentType.Application.Json)
-                setBody("""{"type":"m.login.password","identifier":{"type":"m.id.user","user":"$userId"},"password":"$password"}""")
+                setBody(loginRequestBody)
             }
 
             println("📥 Login response: ${response.status}")
@@ -218,14 +225,15 @@ suspend fun login(username: String, password: String, homeserver: String): Login
                 if (response.status == HttpStatusCode.BadRequest) {
                     println("Trying older login format...")
                     try {
-                        val oldLoginRequest = LoginRequest(
-                            user = userId,
-                            password = password
-                        )
+                        val oldLoginRequestBody = if (deviceIdToUse != null) {
+                            """{"type":"m.login.password","user":"$userId","password":"$password","device_id":"$deviceIdToUse"}"""
+                        } else {
+                            """{"type":"m.login.password","user":"$userId","password":"$password"}"""
+                        }
 
                         val oldResponse = client.post("$finalHomeserver/_matrix/client/v3/login") {
                             contentType(ContentType.Application.Json)
-                            setBody("""{"type":"m.login.password","user":"$userId","password":"$password"}""")
+                            setBody(oldLoginRequestBody)
                         }
 
                         if (oldResponse.status == HttpStatusCode.OK) {
@@ -275,14 +283,15 @@ suspend fun login(username: String, password: String, homeserver: String): Login
                 println("Login failed on discovered homeserver $actualHomeserver, trying provided homeserver: $cleanHomeserver")
                 currentHomeserver = cleanHomeserver
 
-                val fallbackRequest = LoginRequestV2(
-                    identifier = Identifier(user = userId),
-                    password = password
-                )
+                val fallbackRequestBody = if (deviceIdToUse != null) {
+                    """{"type":"m.login.password","identifier":{"type":"m.id.user","user":"$userId"},"password":"$password","device_id":"$deviceIdToUse"}"""
+                } else {
+                    """{"type":"m.login.password","identifier":{"type":"m.id.user","user":"$userId"},"password":"$password"}"""
+                }
 
                 val fallbackResponse = client.post("$cleanHomeserver/_matrix/client/v3/login") {
                     contentType(ContentType.Application.Json)
-                    setBody("""{"type":"m.login.password","identifier":{"type":"m.id.user","user":"$userId"},"password":"$password"}""")
+                    setBody(fallbackRequestBody)
                 }
 
                 println("📥 Fallback login response: ${fallbackResponse.status}")
