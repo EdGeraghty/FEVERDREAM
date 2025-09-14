@@ -61,8 +61,8 @@
 - [x] Fix Matrix Key Backup Functionality
 	Fixed serialization errors and coroutine scope issues that prevented key backup from working. Replaced JsonObject/mapOf with raw JSON string template to avoid LinkedHashMap serialization conflicts. Updated UI components to use rememberCoroutineScope() instead of GlobalScope for proper composition lifecycle management. Key backup can now be enabled successfully with recovery key generation.
 
-- [ ] Implement Key Backup (Future Enhancement)
-	Key backup functionality identified but not yet implemented. Would allow devices to backup and restore room keys for cross-device message decryption.
+- [x] Implement Key Backup (Future Enhancement)
+	Key backup functionality fully implemented with UI in Settings screen. Allows enabling backup, generating recovery keys, uploading room keys, and restoring from backup.
 
 - [ ] Test with Multiple Devices (Future Testing)
 	Full end-to-end encryption testing requires multiple Matrix devices to share room keys. Current single-device setup shows proper encryption workflow but cannot decrypt historical messages without key sharing.
