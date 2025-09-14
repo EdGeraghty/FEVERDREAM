@@ -132,6 +132,7 @@ fun SettingsScreen(
                                         style = MaterialTheme.typography.caption
                                     )
                                     Spacer(modifier = Modifier.height(8.dp))
+                                    val clipboardManager = LocalClipboardManager.current
                                     Row(
                                         modifier = Modifier.fillMaxWidth(),
                                         verticalAlignment = Alignment.CenterVertically
@@ -144,7 +145,7 @@ fun SettingsScreen(
                                             modifier = Modifier.weight(1f)
                                         )
                                         IconButton(onClick = {
-                                            LocalClipboardManager.current.setText(AnnotatedString(key))
+                                            clipboardManager.setText(AnnotatedString(key))
                                         }) {
                                             Text("Copy", style = MaterialTheme.typography.button)
                                         }
