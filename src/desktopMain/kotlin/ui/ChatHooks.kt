@@ -21,7 +21,7 @@ fun useMessageCache(roomId: String, currentMessages: List<Event>, isLoading: Boo
     LaunchedEffect(roomId) {
         while (true) {
             try {
-                val cachedMessages = crypto.roomMessageCache[roomId] ?: emptyList()
+                val cachedMessages = crypto.MessageCacheManager.getRoomMessages(roomId) ?: emptyList()
                 if (cachedMessages.size != messages.size && !isLoading) {
                     // Only refresh if we're not currently loading
                     println("🔄 Refreshing messages from cache: ${cachedMessages.size} vs ${messages.size}")
@@ -55,7 +55,7 @@ fun useMessageLoading(roomId: String): MessageLoadingState {
                 println("🔄 ChatScreen: Set isLoading = true")
 
                 // Check cache first
-                val cachedMessages = crypto.roomMessageCache[roomId]
+                val cachedMessages = crypto.MessageCacheManager.getRoomMessages(roomId)
                 if (cachedMessages != null && cachedMessages.isNotEmpty()) {
                     println("📋 ChatScreen: Using cached messages: ${cachedMessages.size}")
                     messages = cachedMessages.toList()
@@ -78,7 +78,7 @@ fun useMessageLoading(roomId: String): MessageLoadingState {
                 isLoading = false
                 println("🔄 ChatScreen: Set isLoading = false due to timeout")
                 // Show empty messages or cached if available
-                val cachedMessages = crypto.roomMessageCache[roomId]
+                val cachedMessages = crypto.MessageCacheManager.getRoomMessages(roomId)
                 if (cachedMessages != null) {
                     messages = cachedMessages.toList()
                     println("📋 ChatScreen: Fallback to cached messages after timeout: ${cachedMessages.size}")
@@ -109,7 +109,7 @@ fun useMessageLoading(roomId: String): MessageLoadingState {
             println("🛑 User cancelled loading")
             isLoading = false
             // Try to use cached messages if available
-            val cachedMessages = crypto.roomMessageCache[roomId]
+            val cachedMessages = crypto.MessageCacheManager.getRoomMessages(roomId)
             if (cachedMessages != null) {
                 messages = cachedMessages.toList()
                 println("📋 Used cached messages after cancel: ${cachedMessages.size}")

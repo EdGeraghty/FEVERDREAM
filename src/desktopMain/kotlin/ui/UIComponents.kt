@@ -130,7 +130,7 @@ fun MatrixApp(windowManager: WindowManager, backgroundScope: CoroutineScope, onL
                         currentUserId = null
                         currentDeviceId = null
                         // Properly dispose of OlmMachine resources
-                        olmMachine?.let { machine ->
+                        crypto.OlmMachineManager.olmMachine?.let { machine ->
                             try {
                                 // Close the OlmMachine to free native resources
                                 (machine as? AutoCloseable)?.close()
@@ -139,7 +139,7 @@ fun MatrixApp(windowManager: WindowManager, backgroundScope: CoroutineScope, onL
                                 println("⚠️  Error cleaning up OlmMachine: ${e.message}")
                             }
                         }
-                        olmMachine = null
+                        crypto.OlmMachineManager.clearOlmMachine()
                         isPeriodicSyncRunning = false  // Reset periodic sync flag
                         isLoggedIn = false
                         // Close all windows when logging out

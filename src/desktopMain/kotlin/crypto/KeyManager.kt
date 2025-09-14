@@ -20,7 +20,7 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 
 suspend fun hasRoomKey(roomId: String): Boolean {
-    val machine = olmMachine ?: return false
+    val machine = OlmMachineManager.olmMachine ?: return false
     return try {
         // First check if we can encrypt (outbound capability)
         val canEncrypt = try {
@@ -108,7 +108,7 @@ suspend fun hasRoomKey(roomId: String): Boolean {
 
 // Public function to check if we can encrypt messages for a room
 suspend fun canEncryptRoom(roomId: String): Boolean {
-    val machine = olmMachine ?: return false
+    val machine = OlmMachineManager.olmMachine ?: return false
     return try {
         machine.encrypt(roomId, "m.room.message", """{"msgtype": "m.text", "body": "test"}""")
         true

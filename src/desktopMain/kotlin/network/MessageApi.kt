@@ -72,13 +72,13 @@ class MessageFetcher {
  */
 class MessageCacheManager {
     fun getCachedMessages(roomId: String): List<Event> {
-        return roomMessageCache[roomId] ?: emptyList()
+        return crypto.MessageCacheManager.getRoomMessages(roomId)
     }
 
     fun mergeAndUpdateCache(roomId: String, cachedMessages: List<Event>, fetchedMessages: List<Event>): List<Event> {
         val allMessages = (cachedMessages + fetchedMessages).distinctBy { it.event_id }
         println("🔀 MessageCacheManager: Merged to ${allMessages.size} total messages")
-        roomMessageCache[roomId] = allMessages.takeLast(100).toMutableList()
+        crypto.MessageCacheManager.setRoomMessages(roomId, allMessages.takeLast(100))
         return allMessages
     }
 }
@@ -88,7 +88,7 @@ class MessageCacheManager {
  */
 class MessageDecryptor {
     suspend fun decryptMessages(roomId: String, messages: List<Event>): List<Event> {
-        if (olmMachine == null) return messages
+        if (crypto.OlmMachineManager.olmMachine == null) return messages
 
         println("🔐 MessageDecryptor: Starting decryption process")
 
@@ -122,7 +122,7 @@ class MessageDecryptor {
                 senderDeviceTrustRequirement = uniffi.matrix_sdk_crypto.TrustRequirement.UNTRUSTED
             )
 
-            val decryptedEvent = olmMachine!!.decryptRoomEvent(
+            val decryptedEvent = crypto.OlmMachineManager.olmMachine!!.decryptRoomEvent(
                 roomId = roomId,
                 event = JsonObject(mapOf(
                     "type" to JsonPrimitive(event.type),
@@ -190,7 +190,7 @@ class MessageSender {
     }
 
     private suspend fun sendEncryptedMessage(roomId: String, message: String, token: String, skipEncryptionSetup: Boolean): Boolean {
-        val machine = olmMachine
+        val machine = crypto.OlmMachineManager.olmMachine
         if (machine == null) {
             println("⚠️  MessageSender: OlmMachine not available, sending unencrypted message")
             return sendUnencryptedMessage(roomId, message, token)

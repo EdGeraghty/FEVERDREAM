@@ -31,7 +31,7 @@ import kotlinx.serialization.json.JsonElement
 class SyncResponseHandler {
     suspend fun performSync(): SyncResult {
         val token = currentAccessToken ?: return SyncResult.Failure("No access token")
-        val machine = olmMachine ?: return SyncResult.Failure("No OlmMachine")
+        val machine = OlmMachineManager.olmMachine ?: return SyncResult.Failure("No OlmMachine")
 
         return try {
             val response = client.get("$currentHomeserver/_matrix/client/v3/sync") {
@@ -84,21 +84,23 @@ class RoomEventProcessor {
                 println("📥 Received ${timelineEvents.size} timeline events for room $roomId")
 
                 // Initialize cache for this room if not exists
-                if (!roomMessageCache.containsKey(roomId)) {
-                    roomMessageCache[roomId] = mutableListOf()
+                if (!MessageCacheManager.hasMessages(roomId)) {
+                    MessageCacheManager.setRoomMessages(roomId, emptyList())
                 }
 
                 // Add new events to cache (avoiding duplicates by event ID)
-                val existingEventIds = roomMessageCache[roomId]!!.map { it.event_id }.toSet()
+                val existingEvents = MessageCacheManager.getRoomMessages(roomId)
+                val existingEventIds = existingEvents.map { it.event_id }.toSet()
                 val newEvents = timelineEvents.filter { it.event_id !in existingEventIds }
 
                 if (newEvents.isNotEmpty()) {
-                    roomMessageCache[roomId]!!.addAll(newEvents)
+                    val updatedEvents = existingEvents + newEvents
+                    MessageCacheManager.setRoomMessages(roomId, updatedEvents)
                     println("✅ Added ${newEvents.size} new events to cache for room $roomId")
 
                     // Keep only the most recent 100 messages per room
-                    if (roomMessageCache[roomId]!!.size > 100) {
-                        roomMessageCache[roomId] = roomMessageCache[roomId]!!.takeLast(100).toMutableList()
+                    if (updatedEvents.size > 100) {
+                        MessageCacheManager.setRoomMessages(roomId, updatedEvents.takeLast(100))
                     }
                 }
             }
@@ -112,7 +114,7 @@ class RoomEventProcessor {
 class ToDeviceEventProcessor {
     suspend fun processToDeviceEvents(syncResponse: SyncResponse, nextBatchToken: String?): Boolean {
         val token = currentAccessToken ?: return false
-        val machine = olmMachine ?: return false
+        val machine = OlmMachineManager.olmMachine ?: return false
 
         val toDeviceEvents = syncResponse.toDevice?.events ?: emptyList()
         if (toDeviceEvents.isEmpty()) {
@@ -143,7 +145,7 @@ class ToDeviceEventProcessor {
             }
 
             // Process any outgoing requests generated
-            val requestProcessor = OutgoingRequestProcessor()
+            val requestProcessor = SyncOutgoingRequestProcessor()
             requestProcessor.processOutgoingRequests(machine, token)
 
             true
@@ -157,7 +159,7 @@ class ToDeviceEventProcessor {
 /**
  * Processes outgoing requests from OlmMachine
  */
-class OutgoingRequestProcessor {
+class SyncOutgoingRequestProcessor {
     suspend fun processOutgoingRequests(machine: OlmMachine, token: String) {
         val outgoingRequests = machine.outgoingRequests()
         if (outgoingRequests.isEmpty()) return
@@ -286,7 +288,7 @@ class PeriodicSyncManager {
                     println("🔄 Periodic sync: waiting 60 seconds...")
                     kotlinx.coroutines.delay(60000)
 
-                    if (currentAccessToken != null && olmMachine != null) {
+                    if (currentAccessToken != null && OlmMachineManager.olmMachine != null) {
                         val syncResult = syncAndProcessToDevice()
                         if (syncResult) {
                             println("🔄 Periodic sync completed successfully")

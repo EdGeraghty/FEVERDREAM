@@ -3,7 +3,6 @@ import androidx.compose.ui.window.Window
 import kotlin.system.exitProcess
 import ui.*
 import network.closeHttpClient
-import crypto.olmMachine
 import androidx.compose.runtime.*
 import kotlinx.coroutines.*
 import java.io.PrintStream
