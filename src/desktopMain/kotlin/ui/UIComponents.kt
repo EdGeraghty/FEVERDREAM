@@ -44,6 +44,9 @@ fun LoginWindow(onLoginSuccess: () -> Unit) {
             currentHomeserver = session.homeserver
             currentSyncToken = session.syncToken
             println("📂 Existing session loaded, will reuse device ID: ${currentDeviceId}")
+            // Initialize encryption and automatically log in
+            initializeEncryption(session.userId, session.deviceId)
+            onLoginSuccess()
         }
     }
 
@@ -106,6 +109,9 @@ fun MatrixApp(windowManager: WindowManager, onLogout: () -> Unit = {}) {
                 // appScope.launch { crypto.startPeriodicSync() }
                 println("🔄 Periodic sync disabled for debugging")
             }
+        } else {
+            // If no valid session, ensure we're logged out
+            isLoggedIn = false
         }
     }
 
