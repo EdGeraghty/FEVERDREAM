@@ -132,13 +132,72 @@ suspend fun getRoomMessages(roomId: String, skipDecryption: Boolean = false): Li
 
 suspend fun sendMessage(roomId: String, message: String, skipEncryptionSetup: Boolean = false): Boolean {
     val token = currentAccessToken ?: return false
+
     try {
-        val response = client.put("$currentHomeserver/_matrix/client/v3/rooms/$roomId/send/m.room.message/${System.currentTimeMillis()}") {
-            bearerAuth(token)
-            contentType(ContentType.Application.Json)
-            setBody(SendMessageRequest("m.text", message))
+        // Check if room is encrypted
+        val isEncrypted = isRoomEncrypted(roomId)
+
+        if (isEncrypted) {
+            // Encrypt the message for encrypted rooms
+            val machine = olmMachine
+            if (machine != null) {
+                // Ensure encryption is set up for this room
+                if (!skipEncryptionSetup) {
+                    val encryptionSetup = ensureRoomEncryption(roomId)
+                    if (!encryptionSetup) {
+                        println("⚠️  Failed to set up encryption for room $roomId, sending unencrypted message")
+                        // Fall back to unencrypted message
+                        val response = client.put("$currentHomeserver/_matrix/client/v3/rooms/$roomId/send/m.room.message/${System.currentTimeMillis()}") {
+                            bearerAuth(token)
+                            contentType(ContentType.Application.Json)
+                            setBody(SendMessageRequest("m.text", message))
+                        }
+                        return response.status == HttpStatusCode.OK
+                    }
+                }
+
+                // Encrypt the message content
+                val messageContent = """{"msgtype": "m.text", "body": "$message"}"""
+                val encryptedContent = machine.encrypt(roomId, "m.room.message", messageContent)
+
+                // Send as encrypted message
+                val encryptedRequest = JsonObject(mapOf(
+                    "type" to JsonPrimitive("m.room.encrypted"),
+                    "content" to json.parseToJsonElement(encryptedContent)
+                ))
+
+                val response = client.put("$currentHomeserver/_matrix/client/v3/rooms/$roomId/send/m.room.encrypted/${System.currentTimeMillis()}") {
+                    bearerAuth(token)
+                    contentType(ContentType.Application.Json)
+                    setBody(encryptedRequest)
+                }
+
+                val success = response.status == HttpStatusCode.OK
+                if (success) {
+                    println("🔐 Encrypted message sent successfully")
+                } else {
+                    println("❌ Failed to send encrypted message: ${response.status}")
+                }
+                return success
+            } else {
+                println("⚠️  OlmMachine not available, sending unencrypted message")
+                // Fall back to unencrypted message
+                val response = client.put("$currentHomeserver/_matrix/client/v3/rooms/$roomId/send/m.room.message/${System.currentTimeMillis()}") {
+                    bearerAuth(token)
+                    contentType(ContentType.Application.Json)
+                    setBody(SendMessageRequest("m.text", message))
+                }
+                return response.status == HttpStatusCode.OK
+            }
+        } else {
+            // Send unencrypted message for non-encrypted rooms
+            val response = client.put("$currentHomeserver/_matrix/client/v3/rooms/$roomId/send/m.room.message/${System.currentTimeMillis()}") {
+                bearerAuth(token)
+                contentType(ContentType.Application.Json)
+                setBody(SendMessageRequest("m.text", message))
+            }
+            return response.status == HttpStatusCode.OK
         }
-        return response.status == HttpStatusCode.OK
     } catch (e: Exception) {
         println("❌ sendMessage failed: ${e.message}")
         return false
