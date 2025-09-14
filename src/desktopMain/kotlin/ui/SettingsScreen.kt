@@ -4,8 +4,11 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.material.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.Icons.Default
 import androidx.compose.runtime.*
 import androidx.compose.ui.*
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.*
 import crypto.*
@@ -182,6 +185,51 @@ fun SettingsScreen(
                 }
             }
 
+            // Device Keys Section
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                elevation = 4.dp
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text("Device Keys", style = MaterialTheme.typography.h6)
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    val identityKeys = crypto.getIdentityKeys()
+                    val clipboardManager = LocalClipboardManager.current
+
+                    if (identityKeys != null) {
+                        identityKeys["curve25519"]?.let { curveKey ->
+                            KeyDisplayRow(
+                                label = "Curve25519 Key",
+                                key = curveKey,
+                                onCopyClick = {
+                                    clipboardManager.setText(AnnotatedString(curveKey))
+                                }
+                            )
+                        }
+
+                        identityKeys["ed25519"]?.let { edKey ->
+                            Spacer(modifier = Modifier.height(8.dp))
+                            KeyDisplayRow(
+                                label = "Ed25519 Key",
+                                key = edKey,
+                                onCopyClick = {
+                                    clipboardManager.setText(AnnotatedString(edKey))
+                                }
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            "These keys uniquely identify your device for end-to-end encryption.",
+                            style = MaterialTheme.typography.caption
+                        )
+                    } else {
+                        Text("Keys not available", style = MaterialTheme.typography.body2)
+                    }
+                }
+            }
+
             // Encryption Information Section
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -281,5 +329,32 @@ fun SettingsScreen(
                 }
             }
         )
+    }
+}
+
+@Composable
+fun KeyDisplayRow(
+    label: String,
+    key: String,
+    onCopyClick: () -> Unit
+) {
+    Column {
+        Text(label, style = MaterialTheme.typography.subtitle2)
+        Spacer(modifier = Modifier.height(4.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                key,
+                style = MaterialTheme.typography.body2.copy(
+                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                ),
+                modifier = Modifier.weight(1f)
+            )
+            IconButton(onClick = onCopyClick) {
+                Text("Copy", style = MaterialTheme.typography.button)
+            }
+        }
     }
 }

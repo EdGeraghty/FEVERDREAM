@@ -347,3 +347,14 @@ fun getRoomKeyCount(): RoomKeyCounts {
         RoomKeyCounts(0L, 0L)
     }
 }
+
+// Get identity keys (Curve25519 and Ed25519)
+fun getIdentityKeys(): Map<String, String>? {
+    val machine = olmMachine ?: return null
+    return try {
+        machine.identityKeys()
+    } catch (e: Exception) {
+        println("❌ Failed to get identity keys: ${e.message}")
+        null
+    }
+}
