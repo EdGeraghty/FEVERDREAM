@@ -132,13 +132,23 @@ fun SettingsScreen(
                                         style = MaterialTheme.typography.caption
                                     )
                                     Spacer(modifier = Modifier.height(8.dp))
-                                    Text(
-                                        key,
-                                        style = MaterialTheme.typography.body1.copy(
-                                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
-                                        ),
-                                        modifier = Modifier.fillMaxWidth()
-                                    )
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            key,
+                                            style = MaterialTheme.typography.body1.copy(
+                                                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                                            ),
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                        IconButton(onClick = {
+                                            LocalClipboardManager.current.setText(AnnotatedString(key))
+                                        }) {
+                                            Text("Copy", style = MaterialTheme.typography.button)
+                                        }
+                                    }
                                 }
                             }
 
