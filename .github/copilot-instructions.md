@@ -64,6 +64,9 @@
 - [x] Implement Key Backup (Future Enhancement)
 	Key backup functionality fully implemented with UI in Settings screen. Allows enabling backup, generating recovery keys, uploading room keys, and restoring from backup.
 
+- [x] Fix Deprecated API Endpoints
+	Updated all Matrix API endpoints from deprecated r0 to stable v3. Changed sync endpoint from /_matrix/client/r0/sync to /_matrix/client/v3/sync and room message sending endpoint from /_matrix/client/r0/rooms/.../send/... to /_matrix/client/v3/rooms/.../send/.... All endpoints now use the stable v3 API as per Matrix specification.
+
 - [ ] Test with Multiple Devices (Future Testing)
 	Full end-to-end encryption testing requires multiple Matrix devices to share room keys. Current single-device setup shows proper encryption workflow but cannot decrypt historical messages without key sharing.
 

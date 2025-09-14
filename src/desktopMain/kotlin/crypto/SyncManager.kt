@@ -31,7 +31,7 @@ suspend fun syncAndProcessToDevice(timeout: ULong = 30000UL): Boolean {
 
     try {
         println("🔄 Starting sync to process to-device events...")
-        val response = client.get("$currentHomeserver/_matrix/client/r0/sync") {
+        val response = client.get("$currentHomeserver/_matrix/client/v3/sync") {
             bearerAuth(token)
             // Removed timeout parameter - may interfere with next_batch
             // Removed full_state and set_presence parameters that might interfere with next_batch
@@ -297,7 +297,7 @@ suspend fun syncAndProcessToDevice(timeout: ULong = 30000UL): Boolean {
                             }
                             is Request.RoomMessage -> {
                                 // Handle room message request
-                                val roomMessageResponse = client.put("$currentHomeserver/_matrix/client/r0/rooms/${request.roomId}/send/${request.eventType}/${System.currentTimeMillis()}") {
+                                val roomMessageResponse = client.put("$currentHomeserver/_matrix/client/v3/rooms/${request.roomId}/send/${request.eventType}/${System.currentTimeMillis()}") {
                                     bearerAuth(token)
                                     contentType(ContentType.Application.Json)
                                     setBody(json.parseToJsonElement(request.content))
