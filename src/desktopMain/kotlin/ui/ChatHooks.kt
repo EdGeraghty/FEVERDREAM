@@ -9,15 +9,13 @@ import models.Event
 import network.getRoomMessages
 import crypto.*
 import network.sendMessage
+
 /**
- * Custom hook for managing chat messages state, loading, and periodic refresh
+ * Custom hook for managing periodic cache checking for new messages
  */
 @Composable
-fun useChatMessages(roomId: String): ChatMessagesState {
-    val scope = rememberCoroutineScope()
-    var messages by remember { mutableStateOf<List<Event>>(emptyList()) }
-    var isLoading by remember { mutableStateOf(true) }
-    val listState = rememberLazyListState()
+fun useMessageCache(roomId: String, currentMessages: List<Event>, isLoading: Boolean): List<Event> {
+    var messages by remember { mutableStateOf(currentMessages) }
 
     // Periodic refresh to check for new messages from cache - less aggressive
     LaunchedEffect(roomId) {
@@ -35,6 +33,18 @@ fun useChatMessages(roomId: String): ChatMessagesState {
             kotlinx.coroutines.delay(10000) // Check every 10 seconds instead of 5
         }
     }
+
+    return messages
+}
+
+/**
+ * Custom hook for loading messages with timeout and fallback logic
+ */
+@Composable
+fun useMessageLoading(roomId: String): MessageLoadingState {
+    val scope = rememberCoroutineScope()
+    var messages by remember { mutableStateOf<List<Event>>(emptyList()) }
+    var isLoading by remember { mutableStateOf(true) }
 
     // Load messages on room change
     LaunchedEffect(roomId) {
@@ -63,26 +73,6 @@ fun useChatMessages(roomId: String): ChatMessagesState {
                     isLoading = false
                     println("✅ ChatScreen: Loading complete, isLoading = false")
                 }
-
-                // Proactively ensure encryption is set up for this room
-                // This creates a fresh outbound session so future messages can be encrypted/decrypted
-                scope.launch {
-                    try {
-                        println("🔐 Proactively setting up encryption for room $roomId")
-                        val encryptionResult = withTimeout(15000L) { // 15 second timeout
-                            crypto.ensureRoomEncryption(roomId)
-                        }
-                        if (encryptionResult) {
-                            println("✅ Proactive encryption setup successful for room $roomId")
-                        } else {
-                            println("⚠️  Proactive encryption setup failed for room $roomId")
-                        }
-                    } catch (e: TimeoutCancellationException) {
-                        println("❌ Proactive encryption setup timed out for room $roomId")
-                    } catch (e: Exception) {
-                        println("⚠️  Proactive encryption setup failed: ${e.message}")
-                    }
-                }
             } catch (e: TimeoutCancellationException) {
                 println("❌ ChatScreen: Loading messages timed out for room $roomId")
                 isLoading = false
@@ -101,17 +91,9 @@ fun useChatMessages(roomId: String): ChatMessagesState {
         }
     }
 
-    // Auto-scroll to bottom when new messages arrive
-    LaunchedEffect(messages.size) {
-        if (messages.isNotEmpty()) {
-            listState.animateScrollToItem(messages.size - 1)
-        }
-    }
-
-    return ChatMessagesState(
+    return MessageLoadingState(
         messages = messages,
         isLoading = isLoading,
-        listState = listState,
         refreshMessages = {
             scope.launch {
                 try {
@@ -136,29 +118,84 @@ fun useChatMessages(roomId: String): ChatMessagesState {
     )
 }
 
-/**
- * State holder for chat messages
- */
-data class ChatMessagesState(
+data class MessageLoadingState(
     val messages: List<Event>,
     val isLoading: Boolean,
-    val listState: LazyListState,
     val refreshMessages: () -> Unit,
     val cancelLoading: () -> Unit
 )
 
 /**
- * Custom hook for managing message sending state and logic
+ * Custom hook for proactive encryption setup for a room
  */
 @Composable
-fun useMessageSending(roomId: String): MessageSendingState {
+fun useEncryptionSetup(roomId: String) {
     val scope = rememberCoroutineScope()
+
+    LaunchedEffect(roomId) {
+        scope.launch {
+            try {
+                println("🔐 Proactively setting up encryption for room $roomId")
+                val encryptionResult = withTimeout(15000L) { // 15 second timeout
+                    crypto.ensureRoomEncryption(roomId)
+                }
+                if (encryptionResult) {
+                    println("✅ Proactive encryption setup successful for room $roomId")
+                } else {
+                    println("⚠️  Proactive encryption setup failed for room $roomId")
+                }
+            } catch (e: TimeoutCancellationException) {
+                println("❌ Proactive encryption setup timed out for room $roomId")
+            } catch (e: Exception) {
+                println("⚠️  Proactive encryption setup failed: ${e.message}")
+            }
+        }
+    }
+}
+
+/**
+ * Custom hook for auto-scrolling to bottom when new messages arrive
+ */
+@Composable
+fun useAutoScroll(messages: List<Event>, listState: LazyListState) {
+    LaunchedEffect(messages.size) {
+        if (messages.isNotEmpty()) {
+            listState.animateScrollToItem(messages.size - 1)
+        }
+    }
+}
+
+/**
+ * Custom hook for managing message input state
+ */
+@Composable
+fun useMessageInput(): MessageInputState {
     var newMessage by remember { mutableStateOf("") }
+
+    return MessageInputState(
+        newMessage = newMessage,
+        onMessageChange = { text: String -> newMessage = text },
+        clearMessage = { newMessage = "" }
+    )
+}
+
+data class MessageInputState(
+    val newMessage: String,
+    val onMessageChange: (String) -> Unit,
+    val clearMessage: () -> Unit
+)
+
+/**
+ * Custom hook for managing message sending logic with encryption
+ */
+@Composable
+fun useMessageSendLogic(roomId: String, onMessageSent: () -> Unit): MessageSendLogicState {
+    val scope = rememberCoroutineScope()
     var isSending by remember { mutableStateOf(false) }
 
-    val sendMessageAction: () -> Unit = {
-        println("🔘 Send button clicked, message: '$newMessage'")
-        if (newMessage.isNotBlank()) {
+    val sendMessageAction: (String) -> Unit = { messageText ->
+        println("🔘 Send button clicked, message: '$messageText'")
+        if (messageText.isNotBlank()) {
             println("📤 Starting send message process...")
             scope.launch {
                 isSending = true
@@ -175,12 +212,12 @@ fun useMessageSending(roomId: String): MessageSendingState {
                     if (canEncrypt) {
                         // Skip encryption setup - we've already verified it's available
                         println("📤 Calling sendMessage (skipping encryption setup)...")
-                        val sendResult = sendMessage(roomId, newMessage, skipEncryptionSetup = true)
+                        val sendResult = sendMessage(roomId, messageText, skipEncryptionSetup = true)
                         println("📤 sendMessage returned: $sendResult")
 
                         if (sendResult) {
-                            println("✅ Message sent successfully, clearing newMessage")
-                            newMessage = ""
+                            println("✅ Message sent successfully")
+                            onMessageSent()
                         } else {
                             println("❌ Message sending failed")
                         }
@@ -199,12 +236,12 @@ fun useMessageSending(roomId: String): MessageSendingState {
                             kotlinx.coroutines.delay(2000)
 
                             println("📤 Calling sendMessage...")
-                            val sendResult = sendMessage(roomId, newMessage)
+                            val sendResult = sendMessage(roomId, messageText)
                             println("📤 sendMessage returned: $sendResult")
 
                             if (sendResult) {
-                                println("✅ Message sent successfully, clearing newMessage")
-                                newMessage = ""
+                                println("✅ Message sent successfully")
+                                onMessageSent()
                             } else {
                                 println("❌ Message sending failed")
                             }
@@ -227,11 +264,67 @@ fun useMessageSending(roomId: String): MessageSendingState {
         }
     }
 
-    return MessageSendingState(
-        newMessage = newMessage,
+    return MessageSendLogicState(
         isSending = isSending,
-        onMessageChange = { text: String -> newMessage = text },
         sendMessage = sendMessageAction
+    )
+}
+
+data class MessageSendLogicState(
+    val isSending: Boolean,
+    val sendMessage: (String) -> Unit
+)
+/**
+ * Custom hook for managing chat messages state, loading, and periodic refresh
+ */
+@Composable
+fun useChatMessages(roomId: String): ChatMessagesState {
+    val loadingState = useMessageLoading(roomId)
+    val cachedMessages = useMessageCache(roomId, loadingState.messages, loadingState.isLoading)
+    val listState = rememberLazyListState()
+
+    // Use cached messages if available, otherwise use loading state messages
+    val currentMessages = if (cachedMessages.isNotEmpty()) cachedMessages else loadingState.messages
+
+    // Set up encryption proactively
+    useEncryptionSetup(roomId)
+
+    // Auto-scroll to bottom when new messages arrive
+    useAutoScroll(currentMessages, listState)
+
+    return ChatMessagesState(
+        messages = currentMessages,
+        isLoading = loadingState.isLoading,
+        listState = listState,
+        refreshMessages = loadingState.refreshMessages,
+        cancelLoading = loadingState.cancelLoading
+    )
+}
+
+/**
+ * State holder for chat messages
+ */
+data class ChatMessagesState(
+    val messages: List<Event>,
+    val isLoading: Boolean,
+    val listState: LazyListState,
+    val refreshMessages: () -> Unit,
+    val cancelLoading: () -> Unit
+)
+
+/**
+ * Custom hook for managing message sending state and logic
+ */
+@Composable
+fun useMessageSending(roomId: String): MessageSendingState {
+    val inputState = useMessageInput()
+    val sendLogicState = useMessageSendLogic(roomId, inputState.clearMessage)
+
+    return MessageSendingState(
+        newMessage = inputState.newMessage,
+        isSending = sendLogicState.isSending,
+        onMessageChange = inputState.onMessageChange,
+        sendMessage = { sendLogicState.sendMessage(inputState.newMessage) }
     )
 }
 

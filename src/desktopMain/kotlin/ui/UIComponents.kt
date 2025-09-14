@@ -26,8 +26,7 @@ sealed class Screen {
 fun SettingsWindow(windowManager: WindowManager) {
     MaterialTheme {
         SettingsScreen(
-            onBack = { windowManager.closeSettingsWindow() },
-            windowManager = windowManager
+            onBack = { windowManager.closeSettingsWindow() }
         )
     }
 }
