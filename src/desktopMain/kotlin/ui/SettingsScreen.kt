@@ -195,7 +195,7 @@ fun SettingsScreen(
                     Text("Room keys stored: ${roomKeyCount.total}", style = MaterialTheme.typography.body2)
                     Text("Room keys backed up: ${roomKeyCount.backedUp}", style = MaterialTheme.typography.body2)
 
-                    if (roomKeyCount.total > 0UL && roomKeyCount.backedUp == 0UL && backupEnabled) {
+                    if (roomKeyCount.total > 0L && roomKeyCount.backedUp == 0L && backupEnabled) {
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(
                             "⚠️ You have room keys that haven't been backed up yet.",
