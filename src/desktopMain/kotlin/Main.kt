@@ -37,6 +37,9 @@ fun main() = application {
         }
     }
 
+    // Global scope for background tasks like periodic sync
+    val backgroundScope = rememberCoroutineScope { Dispatchers.IO + SupervisorJob() }
+
     // Shared state for managing multiple windows
     val windowManager = remember { WindowManager() }
     var showLoginWindow by remember { mutableStateOf(true) }
@@ -65,20 +68,14 @@ fun main() = application {
     // Main rooms window - shown after login
     if (!showLoginWindow) {
         Window(onCloseRequest = {
-            // Restore stderr before exit
-            System.setErr(originalStderr)
-            // Close all chat windows first
+            // Instead of exiting, treat this as a logout to keep background tasks running
+            showLoginWindow = true
+            // Close all chat windows
             windowManager.closeAllChatWindows()
             // Close settings window
             windowManager.closeSettingsWindow()
-            // Clean up HTTP client
-            closeHttpClient()
-            // Note: Don't clean up OlmMachine here as it may still be needed
-            // OlmMachine will be cleaned up by the JVM garbage collector
-            println("ℹ️  App closing - OlmMachine will be cleaned up by garbage collector")
-            exitProcess(0)
         }, title = "FEVERDREAM - Matrix Client") {
-            MatrixApp(windowManager, onLogout = { showLoginWindow = true })
+            MatrixApp(windowManager, backgroundScope, onLogout = { showLoginWindow = true })
         }
     }
 

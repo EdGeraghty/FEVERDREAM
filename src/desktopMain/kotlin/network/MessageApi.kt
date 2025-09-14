@@ -81,8 +81,9 @@ suspend fun getRoomMessages(roomId: String, skipDecryption: Boolean = false): Li
                         // Validate that the encrypted event has required fields
                         val content = event.content
                         if (content is JsonObject) {
-                            val algorithm = content["algorithm"]?.jsonPrimitive?.content
-                            val ciphertext = content["ciphertext"]?.jsonPrimitive?.content
+                            val jsonContent = content as JsonObject
+                            val algorithm = jsonContent["algorithm"]?.jsonPrimitive?.content
+                            val ciphertext = jsonContent["ciphertext"]?.jsonPrimitive?.content
 
                             if (algorithm.isNullOrEmpty() || ciphertext.isNullOrEmpty()) {
                                 println("⚠️  Malformed encrypted event ${event.event_id}: missing algorithm or ciphertext field")

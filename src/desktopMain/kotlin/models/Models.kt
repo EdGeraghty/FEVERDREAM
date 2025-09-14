@@ -31,7 +31,7 @@ data class StateEvent(val type: String, val state_key: String, val sender: Strin
 data class SyncResponse(
     val rooms: Rooms? = null,
     val toDevice: ToDevice? = null,
-    val nextBatch: String? = null
+    val next_batch: String? = null
 )
 
 @Serializable

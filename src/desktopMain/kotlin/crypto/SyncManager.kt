@@ -3,6 +3,8 @@ package crypto
 import network.currentAccessToken
 import network.currentHomeserver
 import network.currentSyncToken
+import network.currentUserId
+import network.currentDeviceId
 
 import io.ktor.client.call.*
 import io.ktor.client.request.*
@@ -23,15 +25,16 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 
 suspend fun syncAndProcessToDevice(timeout: ULong = 30000UL): Boolean {
+    println("🔄 SYNC FUNCTION CALLED: syncAndProcessToDevice starting")
     val token = currentAccessToken ?: return false
     val machine = olmMachine ?: return false
 
     try {
         println("🔄 Starting sync to process to-device events...")
-        val response = client.get("$currentHomeserver/_matrix/client/v3/sync") {
+        val response = client.get("$currentHomeserver/_matrix/client/r0/sync") {
             bearerAuth(token)
-            parameter("timeout", timeout.toString()) // Use the timeout parameter
-            parameter("filter", """{"room":{"timeline":{"limit":10},"state":{"limit":0},"ephemeral":{"limit":0}},"presence":{"limit":0},"account_data":{"limit":0},"receipts":{"limit":0}}""")
+            // Removed timeout parameter - may interfere with next_batch
+            // Removed full_state and set_presence parameters that might interfere with next_batch
             // Use since token if we have one
             if (currentSyncToken.isNotBlank()) {
                 parameter("since", currentSyncToken)
@@ -39,12 +42,96 @@ suspend fun syncAndProcessToDevice(timeout: ULong = 30000UL): Boolean {
         }
 
         if (response.status == HttpStatusCode.OK) {
-            val syncResponse = response.body<SyncResponse>()
+            // Debug: Log response details for troubleshooting
+            println("🔄 Sync response status: ${response.status}")
+            println("🔄 Sync response headers: ${response.headers.entries().joinToString(", ") { "${it.key}=${it.value.firstOrNull()}" }}")
+
+            // Read response body once for both logging and parsing
+            val responseText = try {
+                response.body<String>()
+            } catch (bodyException: Exception) {
+                println("❌ Error reading response body: ${bodyException.message}")
+                println("❌ Body exception type: ${bodyException::class.simpleName}")
+                bodyException.printStackTrace()
+                return false
+            }
+
+            println("🔄 Successfully read response body, length: ${responseText.length}")
+            println("🔄 Response body is empty: ${responseText.isEmpty()}")
+            println("🔄 Response body starts with: ${responseText.take(50)}")
+
+            // Check if next_batch appears in the response
+            val containsNextBatch = "next_batch" in responseText
+            println("🔄 Response contains 'next_batch': $containsNextBatch")
+
+            if (containsNextBatch) {
+                // Find the next_batch value
+                val nextBatchPattern = "\"next_batch\"\\s*:\\s*\"([^\"]+)\"".toRegex()
+                val nextBatchMatch = nextBatchPattern.find(responseText)
+                if (nextBatchMatch != null) {
+                    println("🔄 Found next_batch value: ${nextBatchMatch.groupValues[1].take(20)}...")
+                } else {
+                    println("🔄 next_batch field found but could not extract value")
+                }
+            } else {
+                println("🔄 next_batch field not found in response")
+            }
+
+            // Log the raw response (first 1000 chars to avoid flooding)
+            println("🔄 RAW SYNC RESPONSE BODY (first 1000 chars):")
+            println(responseText.take(1000))
+            if (responseText.length > 1000) {
+                println("🔄 ... (${responseText.length - 1000} more characters)")
+            }
+
+            // Parse the response from the text (but don't rely on next_batch field)
+            val syncResponse = try {
+                json.decodeFromString<SyncResponse>(responseText)
+            } catch (parseException: Exception) {
+                println("❌ Error parsing sync response JSON: ${parseException.message}")
+                println("❌ Parse exception type: ${parseException::class.simpleName}")
+                parseException.printStackTrace()
+                return false
+            }
+
+            // Always extract next_batch manually since automatic parsing is unreliable
+            val manualNextBatch = try {
+                val jsonElement = json.parseToJsonElement(responseText)
+                val nextBatchElement = jsonElement.jsonObject["next_batch"]
+                if (nextBatchElement is JsonPrimitive && nextBatchElement.isString) {
+                    val extracted = nextBatchElement.content
+                    println("🔄 Manual extraction successful: $extracted")
+                    extracted
+                } else {
+                    println("🔄 Manual extraction failed: nextBatchElement is $nextBatchElement")
+                    null
+                }
+            } catch (e: Exception) {
+                println("❌ Error manually extracting next_batch: ${e.message}")
+                null
+            }
+
+            // Use manual extraction for next_batch
+            val finalNextBatch = manualNextBatch
+
+            // Debug: Log sync response details
+            println("🔄 Sync response received - nextBatch: $finalNextBatch")
 
             // Update sync token for next sync
-            if (syncResponse.nextBatch != null) {
-                currentSyncToken = syncResponse.nextBatch
+            if (finalNextBatch != null) {
+                currentSyncToken = finalNextBatch
                 println("🔄 Updated sync token: ${currentSyncToken.take(10)}...")
+
+                // Persist the updated sync token to session.json
+                saveSession(SessionData(
+                    userId = currentUserId ?: "",
+                    deviceId = currentDeviceId ?: "",
+                    accessToken = currentAccessToken ?: "",
+                    homeserver = currentHomeserver ?: "",
+                    syncToken = currentSyncToken
+                ))
+            } else {
+                println("⚠️  No next_batch token in sync response")
             }
 
             // Process room events first (for encrypted messages)
@@ -100,7 +187,7 @@ suspend fun syncAndProcessToDevice(timeout: ULong = 30000UL): Boolean {
                     deviceChanges = DeviceLists(emptyList(), emptyList()), // Empty device lists
                     keyCounts = emptyMap<String, Int>(), // Empty key counts map
                     unusedFallbackKeys = null,
-                    nextBatchToken = syncResponse.nextBatch ?: "",
+                    nextBatchToken = finalNextBatch ?: "",
                     decryptionSettings = decryptionSettings
                 )
 
@@ -261,22 +348,39 @@ suspend fun syncAndProcessToDevice(timeout: ULong = 30000UL): Boolean {
 }
 
 suspend fun startPeriodicSync() {
-    while (kotlin.coroutines.coroutineContext.isActive) {
-        try {
-            // Sync every 60 seconds to reduce load and prevent UI freezing
-            kotlinx.coroutines.delay(60000)
-            if (currentAccessToken != null && olmMachine != null) {
-                val syncResult = syncAndProcessToDevice(30000UL)
-                if (syncResult) {
-                    println("🔄 Periodic sync completed successfully")
+    println("🔄 Starting periodic sync loop - entering function")
+    try {
+        println("🔄 Periodic sync: about to enter while loop")
+        while (true) {
+            println("🔄 Periodic sync: inside while loop, iteration starting")
+            try {
+                println("🔄 Periodic sync: waiting 60 seconds...")
+                // Sync every 60 seconds to reduce load and prevent UI freezing
+                kotlinx.coroutines.delay(60000)
+                println("🔄 Periodic sync: delay completed, checking conditions")
+                println("🔄 Periodic sync: currentAccessToken = ${currentAccessToken?.take(10)}...")
+                println("🔄 Periodic sync: olmMachine = $olmMachine")
+                println("🔄 Periodic sync: olmMachine != null = ${olmMachine != null}")
+                if (currentAccessToken != null && olmMachine != null) {
+                    println("🔄 Periodic sync: conditions met, about to call syncAndProcessToDevice")
+                    val syncResult = syncAndProcessToDevice(30000UL)
+                    if (syncResult) {
+                        println("🔄 Periodic sync completed successfully")
+                    } else {
+                        println("⚠️  Periodic sync failed")
+                    }
                 } else {
-                    println("⚠️  Periodic sync failed")
+                    println("⚠️  Periodic sync: conditions not met, skipping")
                 }
+            } catch (e: Exception) {
+                println("❌ Periodic sync error: ${e.message}")
+                e.printStackTrace()
+                // Delay longer on error
+                kotlinx.coroutines.delay(120000)
             }
-        } catch (e: Exception) {
-            println("❌ Periodic sync error: ${e.message}")
-            // Delay longer on error
-            kotlinx.coroutines.delay(120000)
         }
+    } catch (e: Exception) {
+        println("❌ Periodic sync loop crashed: ${e.message}")
+        e.printStackTrace()
     }
 }

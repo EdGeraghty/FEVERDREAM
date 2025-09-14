@@ -82,7 +82,7 @@ fun LoginWindow(onLoginSuccess: () -> Unit) {
 }
 
 @Composable
-fun MatrixApp(windowManager: WindowManager, onLogout: () -> Unit = {}) {
+fun MatrixApp(windowManager: WindowManager, backgroundScope: CoroutineScope, onLogout: () -> Unit = {}) {
     // Use rememberCoroutineScope for composition-aware coroutines
     val appScope = rememberCoroutineScope()
     var isLoggedIn by remember { mutableStateOf(false) }
@@ -105,9 +105,9 @@ fun MatrixApp(windowManager: WindowManager, onLogout: () -> Unit = {}) {
             // Start periodic sync only if not already running
             if (!isPeriodicSyncRunning) {
                 isPeriodicSyncRunning = true
-                // Temporarily disable periodic sync to debug the continuous syncing issue
-                // appScope.launch { crypto.startPeriodicSync() }
-                println("🔄 Periodic sync disabled for debugging")
+                // Use GlobalScope for long-running periodic sync to avoid composition issues
+                kotlinx.coroutines.GlobalScope.launch(Dispatchers.IO) { crypto.startPeriodicSync() }
+                println("🔄 Periodic sync started")
             }
         } else {
             // If no valid session, ensure we're logged out
