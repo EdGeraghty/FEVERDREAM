@@ -7,6 +7,11 @@ plugins {
 kotlin {
     jvm("desktop") {
         // Use system Java instead of specific toolchain
+        compilations.all {
+            kotlinOptions {
+                allWarningsAsErrors = false
+            }
+        }
     }
     sourceSets {
         val commonMain by getting {
