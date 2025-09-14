@@ -23,6 +23,8 @@ import kotlinx.serialization.*
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
+import kotlin.random.Random
+import java.security.SecureRandom
 
 
 // Global OlmMachine instance for encryption operations
@@ -110,4 +112,222 @@ fun clearSessionInfo() {
     currentHomeserver = "https://matrix.org"  // Reset to default instead of null
     currentSyncToken = ""
     olmMachine = null
+}
+
+// Check if key backup is enabled
+fun isKeyBackupEnabled(): Boolean {
+    val machine = olmMachine ?: run {
+        println("🔍 isKeyBackupEnabled: OlmMachine is null")
+        return false
+    }
+    val enabled = machine.backupEnabled()
+    println("🔍 isKeyBackupEnabled: backupEnabled = $enabled")
+    return enabled
+}
+
+// Generate a random backup recovery key
+fun generateBackupRecoveryKey(): BackupRecoveryKey {
+    return BackupRecoveryKey()
+}
+
+// Enable key backup
+suspend fun enableKeyBackup(): String? {
+    val machine = olmMachine ?: return null
+    val token = currentAccessToken ?: return null
+
+    try {
+        // Generate backup recovery key
+        val recoveryKey = generateBackupRecoveryKey()
+        val publicKey = recoveryKey.megolmV1PublicKey()
+        val recoveryKeyBase58 = recoveryKey.toBase58()
+
+        // Create backup version on server
+        val version = createBackupVersion(token, publicKey)
+        if (version == null) return null
+
+        // Enable backup in OlmMachine
+        machine.enableBackupV1(publicKey, version)
+
+        // Save recovery key for later use
+        machine.saveRecoveryKey(recoveryKey, version)
+
+        println("🔐 Key backup enabled with version: $version")
+        println("🔑 Recovery key: $recoveryKeyBase58")
+
+        // Upload existing room keys
+        uploadRoomKeys(token, version)
+
+        return recoveryKeyBase58
+    } catch (e: Exception) {
+        println("❌ Failed to enable key backup: ${e.message}")
+        return null
+    }
+}
+
+// Create backup version on server
+suspend fun createBackupVersion(token: String, publicKey: MegolmV1BackupKey): String? {
+    try {
+        val backupInfo = mapOf(
+            "algorithm" to "m.megolm_backup.v1.curve25519-aes-sha2",
+            "auth_data" to mapOf(
+                "public_key" to publicKey.publicKey,
+                "signatures" to mapOf<String, Any>()  // Empty for now, can add signatures later
+            )
+        )
+
+        val response = client.post("$currentHomeserver/_matrix/client/v3/room_keys/version") {
+            bearerAuth(token)
+            contentType(ContentType.Application.Json)
+            setBody(backupInfo)
+        }
+
+        if (response.status == HttpStatusCode.OK) {
+            val responseBody = response.body<JsonObject>()
+            val version = responseBody["version"]?.jsonPrimitive?.content
+            println("📤 Backup version created: $version")
+            return version
+        } else {
+            println("❌ Failed to create backup version: ${response.status}")
+            return null
+        }
+    } catch (e: Exception) {
+        println("❌ Exception creating backup version: ${e.message}")
+        return null
+    }
+}
+
+// Upload room keys to backup
+suspend fun uploadRoomKeys(token: String, version: String): Boolean {
+    val machine = olmMachine ?: return false
+
+    try {
+        // Get room keys from OlmMachine
+        val request = machine.backupRoomKeys()
+
+        if (request == null) {
+            println("ℹ️  No room keys to backup")
+            return true
+        }
+
+        // The request should be a KeysBackup request with the encrypted keys
+        if (request is Request.KeysBackup) {
+            // Send the request to the server
+            val response = client.put("$currentHomeserver/_matrix/client/v3/room_keys/keys") {
+                bearerAuth(token)
+                parameter("version", request.version)
+                contentType(ContentType.Application.Json)
+                setBody(request.rooms)
+            }
+
+            if (response.status == HttpStatusCode.OK) {
+                println("📤 Uploaded room keys to backup")
+                return true
+            } else {
+                println("❌ Failed to upload room keys: ${response.status}")
+                return false
+            }
+        } else {
+            println("❌ Unexpected request type for backup: ${request::class.simpleName}")
+            return false
+        }
+    } catch (e: Exception) {
+        println("❌ Exception uploading room keys: ${e.message}")
+        return false
+    }
+}
+
+// Restore keys from backup
+suspend fun restoreFromBackup(recoveryKeyBase58: String): Boolean {
+    val machine = olmMachine ?: return false
+    val token = currentAccessToken ?: return false
+
+    try {
+        // Parse recovery key
+        val recoveryKey = BackupRecoveryKey.fromBase58(recoveryKeyBase58)
+
+        // Get backup info from server
+        val backupInfo = getBackupInfo(token)
+        if (backupInfo == null) return false
+
+        val version = backupInfo["version"] as? String ?: return false
+        val algorithm = (backupInfo["algorithm"] as? JsonPrimitive)?.content ?: return false
+
+        if (algorithm != "m.megolm_backup.v1.curve25519-aes-sha2") {
+            println("❌ Unsupported backup algorithm: $algorithm")
+            return false
+        }
+
+        // Verify backup
+        // val verification = machine.verifyBackup(Json.encodeToString(backupInfo))
+        // if (verification != SignatureVerification.Valid) {
+        //     println("❌ Backup verification failed: $verification")
+        //     return false
+        // }
+
+        // Download and import keys
+        val keysImported = downloadAndImportKeys(token, version, recoveryKey)
+
+        if (keysImported > 0) {
+            println("✅ Restored $keysImported keys from backup")
+            return true
+        } else {
+            println("ℹ️  No keys to restore from backup")
+            return true
+        }
+    } catch (e: Exception) {
+        println("❌ Failed to restore from backup: ${e.message}")
+        return false
+    }
+}
+
+// Get backup info from server
+suspend fun getBackupInfo(token: String): Map<String, Any>? {
+    try {
+        val response = client.get("$currentHomeserver/_matrix/client/v3/room_keys/version") {
+            bearerAuth(token)
+        }
+
+        if (response.status == HttpStatusCode.OK) {
+            val responseBody = response.body<JsonObject>()
+            return Json.decodeFromJsonElement<Map<String, Any>>(responseBody)
+        } else {
+            println("❌ Failed to get backup info: ${response.status}")
+            return null
+        }
+    } catch (e: Exception) {
+        println("❌ Exception getting backup info: ${e.message}")
+        return null
+    }
+}
+
+// Download and import keys from backup
+suspend fun downloadAndImportKeys(token: String, version: String, recoveryKey: BackupRecoveryKey): Int {
+    try {
+        val response = client.get("$currentHomeserver/_matrix/client/v3/room_keys/keys") {
+            bearerAuth(token)
+            parameter("version", version)
+        }
+
+        if (response.status == HttpStatusCode.OK) {
+            val responseBody = response.body<JsonObject>()
+            val keysJson = Json.encodeToString(responseBody)
+
+            // Create a simple progress listener
+            val progressListener = object : ProgressListener {
+                override fun onProgress(progress: Int, total: Int) {
+                    println("🔄 Key import progress: $progress/$total")
+                }
+            }
+
+            // Import keys from backup
+            val result = olmMachine?.importRoomKeysFromBackup(keysJson, version, progressListener)
+            return result?.keys?.size ?: 0
+        } else {
+            println("❌ Failed to download keys: ${response.status}")
+            return 0
+        }
+    } catch (e: Exception) {
+        println("❌ Exception downloading keys: ${e.message}")
+        return 0
+    }
 }

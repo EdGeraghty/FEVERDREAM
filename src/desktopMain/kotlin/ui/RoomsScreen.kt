@@ -32,6 +32,9 @@ fun RoomsScreen(
     var roomEncryptionStatus by remember { mutableStateOf<Map<String, Boolean>>(emptyMap()) }
     var invites by remember { mutableStateOf<List<RoomInvite>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
+    var backupEnabled by remember { mutableStateOf(false) }
+    var recoveryKey by remember { mutableStateOf<String?>(null) }
+    var showRestoreDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         scope.launch {
@@ -61,6 +64,11 @@ fun RoomsScreen(
                         println("⚠️  Failed to load encryption status: ${e.message}")
                     }
                 }
+
+                // Check if backup is enabled
+                println("🔍 Checking if key backup is enabled...")
+                backupEnabled = crypto.isKeyBackupEnabled()
+                println("🔍 Key backup enabled: $backupEnabled")
             } catch (e: Exception) {
                 println("❌ Failed to load rooms: ${e.message}")
                 isLoading = false
@@ -72,6 +80,27 @@ fun RoomsScreen(
         TopAppBar(
             title = { Text("Rooms") },
             actions = {
+                if (!backupEnabled) {
+                    Button(onClick = {
+                        scope.launch {
+                            val key = crypto.enableKeyBackup()
+                            if (key != null) {
+                                recoveryKey = key
+                                backupEnabled = true
+                            }
+                        }
+                    }) {
+                        Text("Enable Backup")
+                    }
+                } else {
+                    Text("Backup Enabled", modifier = Modifier.padding(horizontal = 16.dp))
+                    recoveryKey?.let { key ->
+                        Text("Recovery Key: ${key.take(20)}...", style = MaterialTheme.typography.caption)
+                    }
+                    Button(onClick = { showRestoreDialog = true }) {
+                        Text("Restore")
+                    }
+                }
                 Button(onClick = onLogout) {
                     Text("Logout")
                 }
@@ -172,5 +201,64 @@ fun RoomsScreen(
                 }
             }
         }
+    }
+
+    if (showRestoreDialog) {
+        var restoreKey by remember { mutableStateOf("") }
+        var isRestoring by remember { mutableStateOf(false) }
+
+        AlertDialog(
+            onDismissRequest = { showRestoreDialog = false },
+            title = { Text("Restore Key Backup") },
+            text = {
+                Column {
+                    Text("Enter your recovery key to restore backed up room keys:")
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = restoreKey,
+                        onValueChange = { restoreKey = it },
+                        label = { Text("Recovery Key") },
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = !isRestoring
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (restoreKey.isNotBlank()) {
+                            isRestoring = true
+                            scope.launch {
+                                try {
+                                    val success = crypto.restoreFromBackup(restoreKey)
+                                    if (success) {
+                                        println("✅ Key backup restored successfully")
+                                        showRestoreDialog = false
+                                    } else {
+                                        println("❌ Failed to restore key backup")
+                                    }
+                                } catch (e: Exception) {
+                                    println("❌ Error restoring backup: ${e.message}")
+                                } finally {
+                                    isRestoring = false
+                                }
+                            }
+                        }
+                    },
+                    enabled = restoreKey.isNotBlank() && !isRestoring
+                ) {
+                    if (isRestoring) {
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp))
+                    } else {
+                        Text("Restore")
+                    }
+                }
+            },
+            dismissButton = {
+                Button(onClick = { showRestoreDialog = false }, enabled = !isRestoring) {
+                    Text("Cancel")
+                }
+            }
+        )
     }
 }
