@@ -26,8 +26,8 @@ fun RoomsScreen(
     onLogout: () -> Unit,
     windowManager: WindowManager? = null
 ) {
-    // Use GlobalScope for long-running operations
-    val scope = remember { kotlinx.coroutines.GlobalScope }
+    // Use rememberCoroutineScope for composition-aware coroutines
+    val scope = rememberCoroutineScope()
     var rooms by remember { mutableStateOf<List<String>>(emptyList()) }
     var roomEncryptionStatus by remember { mutableStateOf<Map<String, Boolean>>(emptyMap()) }
     var invites by remember { mutableStateOf<List<RoomInvite>>(emptyList()) }

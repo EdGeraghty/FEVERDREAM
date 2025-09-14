@@ -22,8 +22,8 @@ sealed class Screen {
 
 @Composable
 fun MatrixApp(windowManager: WindowManager) {
-    // Use GlobalScope for long-running operations to avoid composition cancellation
-    val appScope = remember { kotlinx.coroutines.GlobalScope }
+    // Use rememberCoroutineScope for composition-aware coroutines
+    val appScope = rememberCoroutineScope()
     var currentScreen by remember { mutableStateOf<Screen>(Screen.Login) }
     var loginError by remember { mutableStateOf<String?>(null) }
     var isLoading by remember { mutableStateOf(false) }

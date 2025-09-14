@@ -58,6 +58,9 @@
 - [x] Fix Session Expiration Issues
 	Resolved "bad messagen" issue where encrypted messages appeared undecryptable due to Megolm session expiration. Implemented automatic session renewal during message sending to ensure new messages encrypt successfully. Added comprehensive error handling for historical messages encrypted with expired sessions - these are now properly marked as undecryptable with clear user messages instead of causing application crashes. Application handles single-device Matrix limitations gracefully.
 
+- [x] Fix Matrix Key Backup Functionality
+	Fixed serialization errors and coroutine scope issues that prevented key backup from working. Replaced JsonObject/mapOf with raw JSON string template to avoid LinkedHashMap serialization conflicts. Updated UI components to use rememberCoroutineScope() instead of GlobalScope for proper composition lifecycle management. Key backup can now be enabled successfully with recovery key generation.
+
 - [ ] Implement Key Backup (Future Enhancement)
 	Key backup functionality identified but not yet implemented. Would allow devices to backup and restore room keys for cross-device message decryption.
 

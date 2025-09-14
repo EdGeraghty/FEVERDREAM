@@ -167,18 +167,20 @@ suspend fun enableKeyBackup(): String? {
 // Create backup version on server
 suspend fun createBackupVersion(token: String, publicKey: MegolmV1BackupKey): String? {
     try {
-        val backupInfo = mapOf(
-            "algorithm" to "m.megolm_backup.v1.curve25519-aes-sha2",
-            "auth_data" to mapOf(
-                "public_key" to publicKey.publicKey,
-                "signatures" to mapOf<String, Any>()  // Empty for now, can add signatures later
-            )
-        )
+        val backupInfoJson = """
+            {
+                "algorithm": "m.megolm_backup.v1.curve25519-aes-sha2",
+                "auth_data": {
+                    "public_key": "${publicKey.publicKey}",
+                    "signatures": {}
+                }
+            }
+        """.trimIndent()
 
         val response = client.post("$currentHomeserver/_matrix/client/v3/room_keys/version") {
             bearerAuth(token)
             contentType(ContentType.Application.Json)
-            setBody(backupInfo)
+            setBody(backupInfoJson)
         }
 
         if (response.status == HttpStatusCode.OK) {
@@ -211,12 +213,15 @@ suspend fun uploadRoomKeys(token: String, version: String): Boolean {
 
         // The request should be a KeysBackup request with the encrypted keys
         if (request is Request.KeysBackup) {
+            // Convert rooms to JSON string for proper serialization
+            val roomsJson = Json.encodeToString(request.rooms)
+
             // Send the request to the server
             val response = client.put("$currentHomeserver/_matrix/client/v3/room_keys/keys") {
                 bearerAuth(token)
                 parameter("version", request.version)
                 contentType(ContentType.Application.Json)
-                setBody(request.rooms)
+                setBody(roomsJson)
             }
 
             if (response.status == HttpStatusCode.OK) {
