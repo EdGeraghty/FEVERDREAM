@@ -156,7 +156,7 @@ fun useMessageSending(roomId: String): MessageSendingState {
     var newMessage by remember { mutableStateOf("") }
     var isSending by remember { mutableStateOf(false) }
 
-    val sendMessageAction = {
+    val sendMessageAction: () -> Unit = {
         println("🔘 Send button clicked, message: '$newMessage'")
         if (newMessage.isNotBlank()) {
             println("📤 Starting send message process...")
@@ -230,7 +230,7 @@ fun useMessageSending(roomId: String): MessageSendingState {
     return MessageSendingState(
         newMessage = newMessage,
         isSending = isSending,
-        onMessageChange = fun(text: String) { newMessage = text },
+        onMessageChange = { text: String -> newMessage = text },
         sendMessage = sendMessageAction
     )
 }
