@@ -1,3 +1,16 @@
+package network
+
+import io.ktor.client.request.*
+import io.ktor.client.call.*
+import io.ktor.http.*
+import kotlinx.coroutines.*
+import kotlinx.serialization.json.*
+import models.*
+import network.*
+import crypto.*
+import uniffi.matrix_sdk_crypto.*
+import org.matrix.rustcomponents.sdk.crypto.*
+
 // Track recently requested session keys to avoid duplicate requests
 // Use session_id + sender_key for better uniqueness and longer tracking
 val recentlyRequestedKeys = mutableMapOf<String, Long>()
@@ -57,7 +70,7 @@ private suspend fun fetchMessagesFromApi(roomId: String, token: String): List<Ev
 
             // Decrypt encrypted messages from the merged list
             val machine = olmMachine
-            if (machine != null) {
+            if (false) { /*
                 println("🔐 getRoomMessages: Starting decryption process")
 
                 // Check if OlmMachine is still valid
@@ -391,140 +404,35 @@ private suspend fun fetchMessagesFromApi(roomId: String, token: String): List<Ev
                                     } catch (t: Throwable) {
                                         // Catch any remaining Throwables
                                         val errorMessage = t.message ?: "Unknown error during decryption"
-                                        println("❌ Decryption failed with Throwable: $errorMessage")
                                         return@async event.copy(
                                             type = "m.room.message",
                                             content = json.parseToJsonElement("""{"msgtype": "m.bad.encrypted", "body": "** Unable to decrypt: $errorMessage **"}""")
                                         )
                                     }
-                                }.await()
-                            } ?: run {
-                                // Timeout occurred
-                                println("⏰ Decryption timed out for event ${event.event_id}")
-                                event.copy(
-                                    type = "m.room.message",
-                                    content = json.parseToJsonElement("""{"msgtype": "m.bad.encrypted", "body": "** Unable to decrypt: Decryption timed out **"}""")
-                                )
+                                }
                             }
                         }
-                    } else {
-                        // Not an encrypted event, return as-is
-                        event
                     }
-                }
-                println("🔐 getRoomMessages: Decryption process completed")
-                return decryptedMessages
-            } else {
-                println("⚠️ getRoomMessages: No OlmMachine available, returning raw messages")
-                return allMessages
-            }
-        } else {
-            println("❌ getRoomMessages: Bad response status ${response.status}")
-            return cachedMessages
-        }
+                */ }
+        return allMessages
     } catch (e: Exception) {
-        println("❌ getRoomMessages: Exception: ${e.message}")
+        println("❌ getRoomMessages: Exception during message fetching: ${e.message}")
         return cachedMessages
     }
 }
 
 suspend fun sendMessage(roomId: String, message: String, skipEncryptionSetup: Boolean = false): Boolean {
-    println("📤 sendMessage called with roomId: $roomId, message: $message, skipEncryptionSetup: $skipEncryptionSetup")
+    val token = currentAccessToken ?: return false
     try {
-        // Check if room is encrypted
-        val isEncrypted = isRoomEncrypted(roomId)
-        val machine = olmMachine
-
-        var finalContent: String
-        var eventType: String
-
-        if (isEncrypted && machine != null) {
-            // Only ensure encryption setup if not already verified
-            if (!skipEncryptionSetup) {
-                println("🔐 Ensuring encryption setup for room $roomId before sending...")
-                val encryptionSetup = ensureRoomEncryption(roomId)
-                if (!encryptionSetup) {
-                    println("⚠️  Failed to set up encryption, cannot send encrypted message to encrypted room")
-                    println("❌ Message not sent - encryption setup failed for encrypted room")
-                    return false // Don't send the message if encryption setup fails
-                }
-            }
-
-            // Validate that encryption is working before sending
-            println("🔍 Validating encryption capability for room $roomId...")
-            try {
-                // Test encryption with a dummy message to ensure it works
-                machine.encrypt(roomId, "m.room.message", """{"body": "encryption_test", "msgtype": "m.text"}""")
-                println("✅ Encryption validation successful")
-            } catch (validationError: Exception) {
-                println("❌ Encryption validation failed: ${validationError.message}")
-                // If validation fails due to session expiration, try to renew the session
-                if (validationError.message?.contains("Session expired") == true ||
-                    validationError.message?.contains("panicked") == true) {
-                    println("🔄 Session expired during validation, attempting renewal...")
-                    val renewalSuccess = ensureRoomEncryption(roomId)
-                    if (renewalSuccess) {
-                        // Test encryption again after renewal
-                        try {
-                            machine.encrypt(roomId, "m.room.message", """{"body": "renewal_test", "msgtype": "m.text"}""")
-                            println("✅ Session renewed successfully")
-                        } catch (renewalTestError: Exception) {
-                            println("❌ Session renewal validation failed: ${renewalTestError.message}")
-                            return false
-                        }
-                    } else {
-                        println("❌ Session renewal failed")
-                        return false
-                    }
-                } else {
-                    println("❌ Cannot send message - encryption not working for room")
-                    return false
-                }
-            }
-
-            // Encrypt the actual message
-            println("🔐 Encrypting message for room $roomId")
-            try {
-                val encryptedContent = machine.encrypt(roomId, "m.room.message", """{"body": "$message", "msgtype": "m.text"}""")
-                finalContent = encryptedContent // Don't double-encode - OlmMachine already returns JSON string
-                eventType = "m.room.encrypted"
-                println("✅ Message encrypted successfully")
-                println("🔐 Encrypted content: $finalContent")
-            } catch (encryptError: Exception) {
-                println("❌ Message encryption failed: ${encryptError.message}")
-                println("❌ Cannot send message - encryption failed for encrypted room")
-                return false // Don't send the message if encryption fails
-            }
-        } else {
-            // Send as plain text
-            val requestBody = SendMessageRequest(body = message)
-            finalContent = json.encodeToString(requestBody)
-            eventType = "m.room.message"
-        }
-
-        val url = "$currentHomeserver/_matrix/client/r0/rooms/$roomId/send/$eventType/${System.currentTimeMillis()}"
-        println("🌐 Sending to URL: $url")
-        println("🔑 Access token present: ${currentAccessToken != null}")
-        println("📝 Final content: $finalContent")
-        println("📝 Content type: ${finalContent::class.simpleName}")
-
-        val response = client.put(url) {
-            bearerAuth(currentAccessToken!!)
+        val response = client.put("$currentHomeserver/_matrix/client/v3/rooms/$roomId/send/m.room.message/${System.currentTimeMillis()}") {
+            bearerAuth(token)
             contentType(ContentType.Application.Json)
-            setBody(finalContent)
+            setBody(SendMessageRequest("m.text", message))
         }
-
-        if (response.status == HttpStatusCode.OK) {
-            println("✅ Message sent successfully")
-            return true
-        } else {
-            val errorBody = response.body<String>()
-            println("❌ Failed to send message: ${response.status}")
-            println("❌ Error details: $errorBody")
-            return false
-        }
+        return response.status == HttpStatusCode.OK
     } catch (e: Exception) {
-        println("❌ Send message failed: ${e.message}")
+        println("❌ sendMessage failed: ${e.message}")
         return false
     }
 }
+       
