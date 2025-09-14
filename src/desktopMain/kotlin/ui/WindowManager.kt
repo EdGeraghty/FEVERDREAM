@@ -6,9 +6,13 @@ import androidx.compose.runtime.snapshots.SnapshotStateList
 // Data class to represent a chat window
 data class ChatWindowData(val roomId: String)
 
-// Window manager to handle multiple chat windows
+// Data class to represent a settings window
+data class SettingsWindowData(val id: String = "settings")
+
+// Window manager to handle multiple chat windows and settings windows
 class WindowManager {
     val chatWindows: SnapshotStateList<ChatWindowData> = mutableStateListOf()
+    val settingsWindows: SnapshotStateList<SettingsWindowData> = mutableStateListOf()
 
     fun openChatWindow(roomId: String) {
         // Check if window is already open
@@ -27,5 +31,20 @@ class WindowManager {
 
     fun isChatWindowOpen(roomId: String): Boolean {
         return chatWindows.any { it.roomId == roomId }
+    }
+
+    fun openSettingsWindow() {
+        // Only allow one settings window
+        if (settingsWindows.isEmpty()) {
+            settingsWindows.add(SettingsWindowData())
+        }
+    }
+
+    fun closeSettingsWindow() {
+        settingsWindows.clear()
+    }
+
+    fun isSettingsWindowOpen(): Boolean {
+        return settingsWindows.isNotEmpty()
     }
 }

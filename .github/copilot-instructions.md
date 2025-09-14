@@ -37,8 +37,8 @@
 - [x] Ensure Documentation is Complete
 	README.md created, copilot-instructions.md updated.
 
-- [x] Fix Encryption Issues
-	Resolved end-to-end encryption problems with room key distribution. Implemented comprehensive Olm session establishment, device key queries, room key sharing with proper timing, and periodic sync for continuous to-device event processing. Application now successfully initializes Matrix SDK Crypto and processes encrypted messages.
+- [x] Implement MSN Messenger-style separate windows
+	Application now uses separate windows for login, main room list, chat windows, and settings instead of single-window navigation. Each window can be positioned independently like classic MSN Messenger.
 
 - [x] Improve UI for Encrypted Messages
 	Updated message display to show user-friendly status for encrypted messages that cannot be decrypted due to missing room keys. Added encryption status indicators to room list.

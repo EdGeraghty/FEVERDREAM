@@ -39,21 +39,47 @@ fun main() = application {
 
     // Shared state for managing multiple windows
     val windowManager = remember { WindowManager() }
+    var showLoginWindow by remember { mutableStateOf(true) }
 
-    // Main rooms window
-    Window(onCloseRequest = {
-        // Restore stderr before exit
-        System.setErr(originalStderr)
-        // Close all chat windows first
-        windowManager.closeAllChatWindows()
-        // Clean up HTTP client
-        closeHttpClient()
-        // Note: Don't clean up OlmMachine here as it may still be needed
-        // OlmMachine will be cleaned up by the JVM garbage collector
-        println("ℹ️  App closing - OlmMachine will be cleaned up by garbage collector")
-        exitProcess(0)
-    }, title = "FEVERDREAM - Matrix Client") {
-        MatrixApp(windowManager)
+    // Login window - shown initially and when logged out
+    if (showLoginWindow) {
+        Window(
+            onCloseRequest = {
+                // Restore stderr before exit
+                System.setErr(originalStderr)
+                // Close all windows
+                windowManager.closeAllChatWindows()
+                windowManager.closeSettingsWindow()
+                closeHttpClient()
+                println("ℹ️  App closing - OlmMachine will be cleaned up by garbage collector")
+                exitProcess(0)
+            },
+            title = "Login - FEVERDREAM"
+        ) {
+            LoginWindow(onLoginSuccess = {
+                showLoginWindow = false
+            })
+        }
+    }
+
+    // Main rooms window - shown after login
+    if (!showLoginWindow) {
+        Window(onCloseRequest = {
+            // Restore stderr before exit
+            System.setErr(originalStderr)
+            // Close all chat windows first
+            windowManager.closeAllChatWindows()
+            // Close settings window
+            windowManager.closeSettingsWindow()
+            // Clean up HTTP client
+            closeHttpClient()
+            // Note: Don't clean up OlmMachine here as it may still be needed
+            // OlmMachine will be cleaned up by the JVM garbage collector
+            println("ℹ️  App closing - OlmMachine will be cleaned up by garbage collector")
+            exitProcess(0)
+        }, title = "FEVERDREAM - Matrix Client") {
+            MatrixApp(windowManager, onLogout = { showLoginWindow = true })
+        }
     }
 
     // Create chat windows dynamically
@@ -69,6 +95,20 @@ fun main() = application {
                     roomId = chatWindow.roomId,
                     onClose = { windowManager.closeChatWindow(chatWindow.roomId) }
                 )
+            }
+        }
+    }
+
+    // Create settings window
+    windowManager.settingsWindows.forEach { settingsWindow ->
+        key(settingsWindow.id) {
+            Window(
+                onCloseRequest = {
+                    windowManager.closeSettingsWindow()
+                },
+                title = "Settings - FEVERDREAM"
+            ) {
+                SettingsWindow(windowManager)
             }
         }
     }
