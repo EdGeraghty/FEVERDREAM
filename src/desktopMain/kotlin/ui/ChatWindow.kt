@@ -31,18 +31,10 @@ fun ChatWindow(
             )
 
             if (chatMessagesState.isLoading) {
-                LoadingIndicator()
+                LoadingIndicator(onCancel = { /* TODO: implement cancel loading */ })
             } else {
                 // Show encryption status if there are undecryptable messages
-                val hasUndecryptableMessages = chatMessagesState.messages.any { event ->
-                    val messageContent = event.content as? kotlinx.serialization.json.JsonObject
-                    val msgtype = (messageContent?.get("msgtype") as? kotlinx.serialization.json.JsonPrimitive)?.content
-                    msgtype == "m.bad.encrypted"
-                }
-
-                if (hasUndecryptableMessages) {
-                    EncryptionStatusCard()
-                }
+                EncryptionStatusCard(messages = chatMessagesState.messages)
 
                 MessageList(
                     messages = chatMessagesState.messages,
@@ -50,10 +42,8 @@ fun ChatWindow(
                 )
 
                 MessageInput(
-                    newMessage = messageSendingState.newMessage,
-                    isSending = messageSendingState.isSending,
-                    onMessageChange = messageSendingState.onMessageChange,
-                    onSendMessage = messageSendingState.sendMessage
+                    messageSendingState = messageSendingState,
+                    onRefresh = { /* TODO: implement refresh */ }
                 )
             }
         }
