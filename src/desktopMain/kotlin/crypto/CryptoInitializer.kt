@@ -336,3 +336,14 @@ suspend fun downloadAndImportKeys(token: String, version: String, recoveryKey: B
         return 0
     }
 }
+
+// Get room key counts
+fun getRoomKeyCount(): RoomKeyCounts {
+    val machine = olmMachine ?: return RoomKeyCounts(0UL, 0UL)
+    return try {
+        machine.roomKeyCounts()
+    } catch (e: Exception) {
+        println("❌ Failed to get room key counts: ${e.message}")
+        RoomKeyCounts(0UL, 0UL)
+    }
+}

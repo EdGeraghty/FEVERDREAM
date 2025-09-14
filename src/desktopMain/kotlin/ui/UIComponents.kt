@@ -18,6 +18,7 @@ import crypto.*
 sealed class Screen {
     object Login : Screen()
     object Rooms : Screen()
+    object Settings : Screen()
 }
 
 @Composable
@@ -88,6 +89,9 @@ fun MatrixApp(windowManager: WindowManager) {
                 onRoomSelected = { roomId ->
                     windowManager.openChatWindow(roomId)
                 },
+                onSettings = {
+                    currentScreen = Screen.Settings
+                },
                 onLogout = {
                     appScope.launch {
                         clearSession()
@@ -108,6 +112,12 @@ fun MatrixApp(windowManager: WindowManager) {
                         isPeriodicSyncRunning = false  // Reset periodic sync flag
                         currentScreen = Screen.Login
                     }
+                },
+                windowManager = windowManager
+            )
+            is Screen.Settings -> SettingsScreen(
+                onBack = {
+                    currentScreen = Screen.Rooms
                 },
                 windowManager = windowManager
             )

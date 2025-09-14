@@ -84,7 +84,13 @@ suspend fun getRoomMessages(roomId: String, skipDecryption: Boolean = false): Li
                         )
                         val decryptedEvent = machine.decryptRoomEvent(
                             roomId = roomId,
-                            event = json.encodeToString(event),
+                            event = JsonObject(mapOf(
+                                "type" to JsonPrimitive(event.type),
+                                "event_id" to JsonPrimitive(event.event_id),
+                                "sender" to JsonPrimitive(event.sender),
+                                "origin_server_ts" to JsonPrimitive(event.origin_server_ts),
+                                "content" to event.content
+                            )).toString(),
                             decryptionSettings = decryptionSettings,
                             handleVerificationEvents = false,
                             strictShields = false
