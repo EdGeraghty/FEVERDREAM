@@ -87,3 +87,7 @@ The application follows a modular design with separate components for:
 ## Contributing
 
 This project uses the Matrix Rust SDK for cryptographic operations. Ensure you have the necessary build tools for cross-compilation if modifying crypto components.
+
+## License
+
+[#YOLO Public License (YPL) v0.12.34-hunter.2](https://github.com/YOLOSecFW/YoloSec-Framework/blob/master/YOLO%20Public%20License)
