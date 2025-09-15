@@ -491,13 +491,14 @@ fun ActiveSessionsSection(scope: CoroutineScope) {
                 Spacer(modifier = Modifier.weight(1f))
 
                 // Delete All Sessions button
-                val otherDevices = devices.filter { it.device_id != currentDeviceId }
-                if (otherDevices.isNotEmpty()) {
+                val otherDevices = devices.filter { currentDeviceId == null || it.device_id != currentDeviceId }
+                println("🔍 DeleteAllButton: Total devices: ${devices.size}, Other devices: ${otherDevices.size}, Current device: $currentDeviceId")
+                if (currentDeviceId != null && otherDevices.isNotEmpty()) {
                     TextButton(
                         onClick = { showDeleteAllDialog = true },
-                        colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colors.error)
+                        colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colors.primary)
                     ) {
-                        Text("Delete All Sessions", style = MaterialTheme.typography.button)
+                        Text("🗑️ Delete All Sessions (${otherDevices.size})", style = MaterialTheme.typography.button)
                     }
                     Spacer(modifier = Modifier.width(8.dp))
                 }
@@ -540,7 +541,7 @@ fun ActiveSessionsSection(scope: CoroutineScope) {
                     devices.forEach { device ->
                         DeviceItem(
                             device = device,
-                            isCurrentDevice = device.device_id == currentDeviceId,
+                            isCurrentDevice = currentDeviceId != null && device.device_id == currentDeviceId,
                             onDelete = { showDeleteDialog = device },
                             onRename = { showRenameDialog = device }
                         )
@@ -625,7 +626,7 @@ fun ActiveSessionsSection(scope: CoroutineScope) {
             title = { Text("Delete All Sessions") },
             text = {
                 Column {
-                    val otherDevices = devices.filter { it.device_id != currentDeviceId }
+                    val otherDevices = devices.filter { currentDeviceId == null || it.device_id != currentDeviceId }
                     Text("Are you sure you want to delete ${otherDevices.size} other sessions?")
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
@@ -654,7 +655,7 @@ fun ActiveSessionsSection(scope: CoroutineScope) {
             confirmButton = {
                 Button(
                     onClick = {
-                        val otherDevices = devices.filter { it.device_id != currentDeviceId }
+                        val otherDevices = devices.filter { currentDeviceId == null || it.device_id != currentDeviceId }
                         if (otherDevices.isNotEmpty() && password.isNotBlank()) {
                             scope.launch {
                                 isDeleting = true
