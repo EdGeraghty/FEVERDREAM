@@ -99,6 +99,32 @@ data class SessionData(
 )
 
 @Serializable
+data class DeviceInfo(
+    val device_id: String,
+    val display_name: String? = null,
+    val last_seen_ip: String? = null,
+    val last_seen_ts: Long? = null,
+    val user_id: String
+)
+
+@Serializable
+data class DevicesResponse(val devices: List<DeviceInfo>)
+
+@Serializable
+data class DeleteDevicesRequest(val devices: List<String>)
+
+@Serializable
+data class DeleteDeviceRequest(val auth: AuthDict? = null)
+
+@Serializable
+data class AuthDict(
+    val type: String,
+    val session: String? = null,
+    val user: String? = null,
+    val password: String? = null
+)
+
+@Serializable
 data class RoomMembersResponse(val chunk: List<MemberEvent>)
 
 @Serializable

@@ -13,6 +13,8 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.*
 import crypto.*
 import network.*
+import models.DeviceInfo
+import models.DevicesResponse
 
 /**
  * Handles key backup enable/disable and restore operations
@@ -402,6 +404,9 @@ fun SettingsScreen(
 
             // Encryption Information Section
             EncryptionStatusSection(backupEnabled)
+
+            // Active Sessions Section
+            ActiveSessionsSection(scope)
         }
     }
 
@@ -438,4 +443,300 @@ fun KeyDisplayRow(
             }
         }
     }
+}
+
+/**
+ * Displays active sessions/devices for the current user
+ */
+@Composable
+fun ActiveSessionsSection(scope: CoroutineScope) {
+    var devices by remember { mutableStateOf<List<DeviceInfo>>(emptyList()) }
+    var isLoading by remember { mutableStateOf(false) }
+    var showDeleteDialog by remember { mutableStateOf<DeviceInfo?>(null) }
+    var showRenameDialog by remember { mutableStateOf<DeviceInfo?>(null) }
+    var statusMessage by remember { mutableStateOf<String?>(null) }
+
+    // Load devices on first composition
+    LaunchedEffect(Unit) {
+        scope.launch {
+            isLoading = true
+            try {
+                devices = getDevices()
+                println("🔍 ActiveSessions: Loaded ${devices.size} devices")
+            } catch (e: Exception) {
+                println("❌ ActiveSessions: Failed to load devices: ${e.message}")
+                statusMessage = "Failed to load devices: ${e.message}"
+            } finally {
+                isLoading = false
+            }
+        }
+    }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        elevation = 4.dp
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("Active Sessions", style = MaterialTheme.typography.h6)
+                Spacer(modifier = Modifier.weight(1f))
+                IconButton(
+                    onClick = {
+                        scope.launch {
+                            isLoading = true
+                            try {
+                                devices = getDevices()
+                                statusMessage = null
+                            } catch (e: Exception) {
+                                statusMessage = "Failed to refresh: ${e.message}"
+                            } finally {
+                                isLoading = false
+                            }
+                        }
+                    },
+                    enabled = !isLoading
+                ) {
+                    if (isLoading) {
+                        CircularProgressIndicator(modifier = Modifier.size(20.dp))
+                    } else {
+                        Text("↻", style = MaterialTheme.typography.button)
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            if (devices.isEmpty() && !isLoading) {
+                Text("No devices found", style = MaterialTheme.typography.body2)
+            } else {
+                devices.forEach { device ->
+                    DeviceItem(
+                        device = device,
+                        isCurrentDevice = device.device_id == currentDeviceId,
+                        onDelete = { showDeleteDialog = device },
+                        onRename = { showRenameDialog = device }
+                    )
+                    if (device != devices.last()) {
+                        Divider(modifier = Modifier.padding(vertical = 8.dp))
+                    }
+                }
+            }
+
+            statusMessage?.let { message ->
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    message,
+                    color = if (message.contains("Failed") || message.contains("Error")) MaterialTheme.colors.error else MaterialTheme.colors.primary,
+                    style = MaterialTheme.typography.body2
+                )
+            }
+        }
+    }
+
+    // Delete Device Dialog
+    showDeleteDialog?.let { device ->
+        DeleteDeviceDialog(
+            device = device,
+            onDismiss = { showDeleteDialog = null },
+            onConfirm = { confirmedDevice ->
+                scope.launch {
+                    try {
+                        val success = deleteDevice(confirmedDevice.device_id)
+                        if (success) {
+                            devices = devices.filter { it.device_id != confirmedDevice.device_id }
+                            statusMessage = "Device deleted successfully"
+                            showDeleteDialog = null
+                        } else {
+                            statusMessage = "Failed to delete device"
+                        }
+                    } catch (e: Exception) {
+                        statusMessage = "Error deleting device: ${e.message}"
+                    }
+                }
+            }
+        )
+    }
+
+    // Rename Device Dialog
+    showRenameDialog?.let { device ->
+        RenameDeviceDialog(
+            device = device,
+            onDismiss = { showRenameDialog = null },
+            onConfirm = { confirmedDevice, newName ->
+                scope.launch {
+                    try {
+                        val success = updateDeviceDisplayName(confirmedDevice.device_id, newName)
+                        if (success) {
+                            devices = devices.map {
+                                if (it.device_id == confirmedDevice.device_id) {
+                                    it.copy(display_name = newName)
+                                } else it
+                            }
+                            statusMessage = "Device renamed successfully"
+                            showRenameDialog = null
+                        } else {
+                            statusMessage = "Failed to rename device"
+                        }
+                    } catch (e: Exception) {
+                        statusMessage = "Error renaming device: ${e.message}"
+                    }
+                }
+            }
+        )
+    }
+}
+
+/**
+ * Individual device item in the sessions list
+ */
+@Composable
+fun DeviceItem(
+    device: DeviceInfo,
+    isCurrentDevice: Boolean,
+    onDelete: () -> Unit,
+    onRename: () -> Unit
+) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        device.display_name ?: "Unnamed Device",
+                        style = MaterialTheme.typography.subtitle1
+                    )
+                    if (isCurrentDevice) {
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            "(Current)",
+                            style = MaterialTheme.typography.caption,
+                            color = MaterialTheme.colors.primary
+                        )
+                    }
+                }
+
+                Text(
+                    "ID: ${device.device_id}",
+                    style = MaterialTheme.typography.caption
+                )
+
+                device.last_seen_ts?.let { timestamp ->
+                    val date = java.util.Date(timestamp)
+                    val formatter = java.text.SimpleDateFormat("MMM dd, yyyy HH:mm", java.util.Locale.getDefault())
+                    Text(
+                        "Last seen: ${formatter.format(date)}",
+                        style = MaterialTheme.typography.caption
+                    )
+                }
+
+                device.last_seen_ip?.let { ip ->
+                    Text(
+                        "IP: $ip",
+                        style = MaterialTheme.typography.caption
+                    )
+                }
+            }
+
+            Row {
+                IconButton(onClick = onRename) {
+                    Text("✏️", style = MaterialTheme.typography.button)
+                }
+                if (!isCurrentDevice) {
+                    IconButton(onClick = onDelete) {
+                        Text("🗑️", style = MaterialTheme.typography.button)
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Dialog for deleting a device
+ */
+@Composable
+fun DeleteDeviceDialog(
+    device: DeviceInfo,
+    onDismiss: () -> Unit,
+    onConfirm: (DeviceInfo) -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Delete Device") },
+        text = {
+            Column {
+                Text("Are you sure you want to delete this device?")
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    "Device: ${device.display_name ?: "Unnamed"} (${device.device_id})",
+                    style = MaterialTheme.typography.body2
+                )
+                if (device.device_id == currentDeviceId) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        "⚠️ This is your current device. Deleting it will log you out.",
+                        color = MaterialTheme.colors.error,
+                        style = MaterialTheme.typography.body2
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Button(onClick = { onConfirm(device) }) {
+                Text("Delete")
+            }
+        },
+        dismissButton = {
+            Button(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        }
+    )
+}
+
+/**
+ * Dialog for renaming a device
+ */
+@Composable
+fun RenameDeviceDialog(
+    device: DeviceInfo,
+    onDismiss: () -> Unit,
+    onConfirm: (DeviceInfo, String) -> Unit
+) {
+    var newName by remember { mutableStateOf(device.display_name ?: "") }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Rename Device") },
+        text = {
+            Column {
+                Text("Enter a new display name for this device:")
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = newName,
+                    onValueChange = { newName = it },
+                    label = { Text("Display Name") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { onConfirm(device, newName) },
+                enabled = newName.isNotBlank()
+            ) {
+                Text("Rename")
+            }
+        },
+        dismissButton = {
+            Button(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        }
+    )
 }
