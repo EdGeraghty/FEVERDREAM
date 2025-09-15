@@ -154,3 +154,9 @@ data class MemberContent(
     val displayname: String? = null,
     val avatar_url: String? = null
 )
+
+@Serializable
+data class DeleteDevicesRequestWithAuth(
+    val devices: List<String>,
+    val auth: AuthDict
+)

@@ -459,6 +459,7 @@ fun ActiveSessionsSection(scope: CoroutineScope) {
     var isLoading by remember { mutableStateOf(false) }
     var showDeleteDialog by remember { mutableStateOf<DeviceInfo?>(null) }
     var showRenameDialog by remember { mutableStateOf<DeviceInfo?>(null) }
+    var showDeleteAllDialog by remember { mutableStateOf(false) }
     var statusMessage by remember { mutableStateOf<String?>(null) }
 
     // Load devices on first composition
@@ -488,6 +489,19 @@ fun ActiveSessionsSection(scope: CoroutineScope) {
             ) {
                 Text("Active Sessions", style = MaterialTheme.typography.h6)
                 Spacer(modifier = Modifier.weight(1f))
+
+                // Delete All Sessions button
+                val otherDevices = devices.filter { it.device_id != currentDeviceId }
+                if (otherDevices.isNotEmpty()) {
+                    TextButton(
+                        onClick = { showDeleteAllDialog = true },
+                        colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colors.error)
+                    ) {
+                        Text("Delete All Sessions", style = MaterialTheme.typography.button)
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                }
+
                 IconButton(
                     onClick = {
                         scope.launch {
@@ -595,6 +609,89 @@ fun ActiveSessionsSection(scope: CoroutineScope) {
                     } catch (e: Exception) {
                         statusMessage = "Error renaming device: ${e.message}"
                     }
+                }
+            }
+        )
+    }
+
+    // Delete All Devices Dialog
+    if (showDeleteAllDialog) {
+        var password by remember { mutableStateOf("") }
+        var showPassword by remember { mutableStateOf(false) }
+        var isDeleting by remember { mutableStateOf(false) }
+
+        AlertDialog(
+            onDismissRequest = { if (!isDeleting) showDeleteAllDialog = false },
+            title = { Text("Delete All Sessions") },
+            text = {
+                Column {
+                    val otherDevices = devices.filter { it.device_id != currentDeviceId }
+                    Text("Are you sure you want to delete ${otherDevices.size} other sessions?")
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        "This will log you out from all other devices but keep your current session active.",
+                        style = MaterialTheme.typography.body2
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text("Enter your password to confirm:", style = MaterialTheme.typography.body2)
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    OutlinedTextField(
+                        value = password,
+                        onValueChange = { password = it },
+                        label = { Text("Password") },
+                        visualTransformation = if (showPassword) VisualTransformation.None else PasswordVisualTransformation(),
+                        trailingIcon = {
+                            IconButton(onClick = { showPassword = !showPassword }) {
+                                Text(if (showPassword) "🙈" else "👁️", style = MaterialTheme.typography.button)
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = !isDeleting
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val otherDevices = devices.filter { it.device_id != currentDeviceId }
+                        if (otherDevices.isNotEmpty() && password.isNotBlank()) {
+                            scope.launch {
+                                isDeleting = true
+                                try {
+                                    val deviceIds = otherDevices.map { it.device_id }
+                                    val success = deleteDevices(deviceIds, password)
+                                    if (success) {
+                                        // Refresh the device list
+                                        devices = getDevices()
+                                        statusMessage = "Successfully deleted ${otherDevices.size} sessions"
+                                        showDeleteAllDialog = false
+                                    } else {
+                                        statusMessage = "Failed to delete sessions"
+                                    }
+                                } catch (e: Exception) {
+                                    statusMessage = "Error deleting sessions: ${e.message}"
+                                } finally {
+                                    isDeleting = false
+                                }
+                            }
+                        }
+                    },
+                    enabled = password.isNotBlank() && !isDeleting
+                ) {
+                    if (isDeleting) {
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp))
+                    } else {
+                        Text("Delete All Sessions")
+                    }
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { if (!isDeleting) showDeleteAllDialog = false },
+                    enabled = !isDeleting
+                ) {
+                    Text("Cancel")
                 }
             }
         )

@@ -75,6 +75,91 @@ suspend fun deleteDevices(deviceIds: List<String>): Boolean {
 }
 
 /**
+ * Delete specific devices with UIA (User-Interactive Authentication) support
+ */
+suspend fun deleteDevices(deviceIds: List<String>, password: String? = null): Boolean {
+    val token = currentAccessToken ?: return false
+    val userId = currentUserId ?: return false
+    println("🔍 deleteDevices: Starting request to delete ${deviceIds.size} devices")
+    try {
+        val response = client.post("$currentHomeserver/_matrix/client/v3/delete_devices") {
+            bearerAuth(token)
+            contentType(ContentType.Application.Json)
+            setBody(DeleteDevicesRequest(deviceIds))
+        }
+        println("📥 deleteDevices: Response status: ${response.status}")
+
+        if (response.status == HttpStatusCode.OK) {
+            println("✅ deleteDevices: Successfully deleted ${deviceIds.size} devices")
+            return true
+        } else if (response.status == HttpStatusCode.Unauthorized) {
+            // Handle UIA (User-Interactive Authentication)
+            println("🔐 deleteDevices: UIA required, attempting authentication...")
+            try {
+                val uiaResponse = response.body<UIAChallenge>()
+                println("🔑 deleteDevices: Got UIA session: ${uiaResponse.session}")
+
+                if (password == null) {
+                    println("❌ deleteDevices: Password required for UIA but not provided")
+                    return false
+                }
+
+                // Make authenticated request
+                val authResponse = client.post("$currentHomeserver/_matrix/client/v3/delete_devices") {
+                    bearerAuth(token)
+                    contentType(ContentType.Application.Json)
+                    setBody(DeleteDevicesRequestWithAuth(
+                        devices = deviceIds,
+                        auth = AuthDict(
+                            type = "m.login.password",
+                            session = uiaResponse.session,
+                            user = userId,
+                            password = password
+                        )
+                    ))
+                }
+
+                println("📥 deleteDevices: Auth response status: ${authResponse.status}")
+                if (authResponse.status == HttpStatusCode.OK) {
+                    println("✅ deleteDevices: Successfully deleted ${deviceIds.size} devices with authentication")
+                    return true
+                } else {
+                    println("❌ deleteDevices: Authentication failed with status ${authResponse.status}")
+                    try {
+                        val errorBody = authResponse.body<String>()
+                        println("📄 deleteDevices: Auth error response: $errorBody")
+                    } catch (e: Exception) {
+                        println("❌ deleteDevices: Could not read auth error response")
+                    }
+                }
+            } catch (e: Exception) {
+                println("❌ deleteDevices: Failed to parse UIA response: ${e.message}")
+                // Log the raw response for debugging
+                try {
+                    val rawBody = response.body<String>()
+                    println("📄 deleteDevices: Raw UIA response: $rawBody")
+                } catch (e2: Exception) {
+                    println("❌ deleteDevices: Could not read raw response")
+                }
+            }
+        } else {
+            println("❌ deleteDevices: Bad response status ${response.status}")
+            // Log response body for debugging
+            try {
+                val responseBody = response.body<String>()
+                println("📄 deleteDevices: Response body: $responseBody")
+            } catch (e: Exception) {
+                println("❌ deleteDevices: Could not read response body")
+            }
+        }
+    } catch (e: Exception) {
+        println("❌ deleteDevices: Exception: ${e.message}")
+        e.printStackTrace()
+    }
+    return false
+}
+
+/**
  * Delete a single device with UIA (User-Interactive Authentication) support
  */
 suspend fun deleteDevice(deviceId: String, password: String? = null): Boolean {
