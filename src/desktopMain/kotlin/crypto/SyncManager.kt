@@ -161,12 +161,15 @@ class ToDeviceEventProcessor {
  */
 class SyncOutgoingRequestProcessor {
     suspend fun processOutgoingRequests(machine: OlmMachine, token: String) {
+        println("🔄 Calling machine.outgoingRequests() in SyncManager...")
         val outgoingRequests = machine.outgoingRequests()
+        println("📋 Got ${outgoingRequests.size} outgoing requests from OlmMachine")
         if (outgoingRequests.isEmpty()) return
 
         println("📤 Sending ${outgoingRequests.size} outgoing requests from sync processing...")
 
         for (request in outgoingRequests) {
+            println("🔍 Processing request type: ${request::class.simpleName}")
             when (request) {
                 is Request.ToDevice -> processToDeviceRequest(request, token)
                 is Request.KeysQuery -> processKeysQueryRequest(request, token)
@@ -192,12 +195,22 @@ class SyncOutgoingRequestProcessor {
     }
 
     private suspend fun processKeysQueryRequest(request: Request.KeysQuery, token: String) {
+        println("🔍 Processing keys query for users: ${request.users}")
         val response = client.post("$currentHomeserver/_matrix/client/v3/keys/query") {
             bearerAuth(token)
             contentType(ContentType.Application.Json)
-            val convertedUsers = convertMapToHashMap(request.users)
-            val body = createKeysQueryBody(convertedUsers)
+            // Create proper device_keys format: each user should map to an empty array to request all devices
+            val deviceKeys = request.users.associateWith { JsonArray(emptyList()) }
+            val body = JsonObject(mapOf("device_keys" to JsonObject(deviceKeys)))
             setBody(body)
+        }
+        if (response.status != HttpStatusCode.OK) {
+            // Log the request body for debugging
+            val deviceKeys = request.users.associateWith { JsonArray(emptyList()) }
+            val body = JsonObject(mapOf("device_keys" to JsonObject(deviceKeys)))
+            println("📤 Keys query request body: ${body}")
+            println("📤 Users being queried: ${request.users}")
+            println("📤 Response body: ${response.body<String>()}")
         }
         logRequestResult(response, "keys query")
     }

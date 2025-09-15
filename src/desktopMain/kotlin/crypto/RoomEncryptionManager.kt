@@ -66,7 +66,10 @@ class OutgoingRequestProcessor(private val machine: OlmMachine) {
     suspend fun processOutgoingRequests(requests: List<Request>): Boolean {
         val token = currentAccessToken ?: return false
 
+        println("📤 Processing ${requests.size} outgoing requests from RoomEncryptionManager...")
+
         for (request in requests) {
+            println("🔍 Processing request type: ${request::class.simpleName}")
             when (request) {
                 is Request.KeysUpload -> processKeysUpload(request, token)
                 is Request.KeysClaim -> processKeysClaim(request, token)
@@ -154,16 +157,25 @@ class OutgoingRequestProcessor(private val machine: OlmMachine) {
     }
 
     private suspend fun processKeysQuery(request: Request.KeysQuery, token: String) {
+        println("🔍 Processing keys query for users: ${request.users}")
         val response = client.post("$currentHomeserver/_matrix/client/v3/keys/query") {
             bearerAuth(token)
             contentType(ContentType.Application.Json)
-            val body = JsonObject(mapOf("device_keys" to JsonObject(request.users.associate { it to JsonPrimitive("*") })))
+            // Create proper device_keys format: each user should map to an empty array to request all devices
+            val deviceKeys = request.users.associateWith { JsonArray(emptyList()) }
+            val body = JsonObject(mapOf("device_keys" to JsonObject(deviceKeys)))
             setBody(body)
         }
         if (response.status == HttpStatusCode.OK) {
             println("✅ Keys queried successfully")
         } else {
             println("❌ Failed to query keys: ${response.status}")
+            // Log the request body for debugging
+            val deviceKeys = request.users.associateWith { JsonArray(emptyList()) }
+            val body = JsonObject(mapOf("device_keys" to JsonObject(deviceKeys)))
+            println("📤 Request body: ${body}")
+            println("📤 Users being queried: ${request.users}")
+            println("📤 Response body: ${response.body<String>()}")
         }
     }
 }
@@ -412,7 +424,9 @@ suspend fun ensureRoomEncryption(roomId: String): Boolean {
         machine.updateTrackedUsers(allRoomMembers)
 
         // Send any outgoing requests (like keys query) before sharing room key
+        println("🔄 Calling machine.outgoingRequests() in RoomEncryptionManager...")
         val initialRequests = machine.outgoingRequests()
+        println("📋 Got ${initialRequests.size} initial requests from OlmMachine")
         requestProcessor.processOutgoingRequests(initialRequests)
 
         // Test if the new session works
