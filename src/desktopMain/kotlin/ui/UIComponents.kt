@@ -118,7 +118,9 @@ fun MatrixApp(windowManager: WindowManager, backgroundScope: CoroutineScope, onL
         MaterialTheme {
             RoomsScreen(
                 onRoomSelected = { roomId ->
+                    println("🏠 Room selected in MatrixApp: $roomId")
                     windowManager.openChatWindow(roomId)
+                    println("🏠 Chat window opened for: $roomId")
                 },
                 onSettings = {
                     windowManager.openSettingsWindow()

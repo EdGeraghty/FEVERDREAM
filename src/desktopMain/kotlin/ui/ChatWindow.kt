@@ -19,33 +19,32 @@ fun ChatWindow(
     val chatMessagesState = useChatMessages(roomId)
     val messageSendingState = useMessageSending(roomId)
 
-    MaterialTheme {
-        Column(modifier = Modifier.fillMaxSize()) {
-            TopAppBar(
-                title = { Text(roomId) },
-                actions = {
-                    IconButton(onClick = onClose) {
-                        Icon(Icons.Default.Close, contentDescription = "Close")
-                    }
+    Column(modifier = Modifier.fillMaxSize()) {
+        TopAppBar(
+            title = { Text(roomId) },
+            actions = {
+                IconButton(onClick = onClose) {
+                    Icon(Icons.Default.Close, contentDescription = "Close")
                 }
+            }
+        )
+
+        if (chatMessagesState.isLoading) {
+            LoadingIndicator(onCancel = { /* TODO: implement cancel loading */ })
+        } else {
+            // Show encryption status if there are undecryptable messages
+            EncryptionStatusCard(messages = chatMessagesState.messages)
+
+            MessageList(
+                messages = chatMessagesState.messages,
+                listState = chatMessagesState.listState,
+                modifier = Modifier.weight(1f) // Added weight modifier
             )
 
-            if (chatMessagesState.isLoading) {
-                LoadingIndicator(onCancel = { /* TODO: implement cancel loading */ })
-            } else {
-                // Show encryption status if there are undecryptable messages
-                EncryptionStatusCard(messages = chatMessagesState.messages)
-
-                MessageList(
-                    messages = chatMessagesState.messages,
-                    listState = chatMessagesState.listState
-                )
-
-                MessageInput(
-                    messageSendingState = messageSendingState,
-                    onRefresh = { /* TODO: implement refresh */ }
-                )
-            }
+            MessageInput(
+                messageSendingState = messageSendingState,
+                onRefresh = { /* TODO: implement refresh */ }
+            )
         }
     }
 }

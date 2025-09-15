@@ -15,9 +15,14 @@ class WindowManager {
     val settingsWindows: SnapshotStateList<SettingsWindowData> = mutableStateListOf()
 
     fun openChatWindow(roomId: String) {
+        println("🪟 WindowManager: Attempting to open chat window for $roomId")
         // Check if window is already open
         if (chatWindows.none { it.roomId == roomId }) {
+            println("🪟 WindowManager: Creating new chat window for $roomId")
             chatWindows.add(ChatWindowData(roomId))
+            println("🪟 WindowManager: Chat window added. Total windows: ${chatWindows.size}")
+        } else {
+            println("🪟 WindowManager: Chat window for $roomId already exists")
         }
     }
 

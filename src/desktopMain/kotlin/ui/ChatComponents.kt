@@ -98,6 +98,7 @@ fun MessageInput(
     onRefresh: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    println("📝 MessageInput component rendered")
     Row(
         modifier = modifier
             .fillMaxWidth()
@@ -123,7 +124,10 @@ fun MessageInput(
             CircularProgressIndicator(modifier = Modifier.size(24.dp))
         } else {
             Button(
-                onClick = messageSendingState.sendMessage
+                onClick = {
+                    println("🔘 Send button clicked in UI!")
+                    messageSendingState.sendMessage()
+                }
             ) {
                 Text("Send")
             }
