@@ -59,7 +59,7 @@ class KeyBackupManager {
             println("🔑 Recovery key: $recoveryKeyBase58")
 
             // Upload existing room keys
-            uploadRoomKeys(token, version)
+            uploadRoomKeys(token)
 
             recoveryKeyBase58
         } catch (e: Exception) {
@@ -107,7 +107,7 @@ class KeyBackupManager {
     /**
      * Upload room keys to the backup.
      */
-    private suspend fun uploadRoomKeys(token: String, version: String): Boolean {
+    private suspend fun uploadRoomKeys(token: String): Boolean {
         val machine = OlmMachineManager.olmMachine ?: return false
 
         return try {
@@ -153,7 +153,6 @@ class KeyBackupManager {
      * Restore keys from backup using the recovery key.
      */
     suspend fun restoreFromBackup(recoveryKeyBase58: String): Boolean {
-        val machine = OlmMachineManager.olmMachine ?: return false
         val token = currentAccessToken ?: return false
 
         return try {
@@ -213,6 +212,7 @@ class KeyBackupManager {
     /**
      * Download and import keys from backup.
      */
+    @Suppress("UNUSED_PARAMETER")
     private suspend fun downloadAndImportKeys(token: String, version: String, recoveryKey: BackupRecoveryKey): Int {
         return try {
             val response = client.get("$currentHomeserver/_matrix/client/v3/room_keys/keys") {

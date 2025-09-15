@@ -31,7 +31,6 @@ import kotlinx.serialization.json.JsonElement
 class SyncResponseHandler {
     suspend fun performSync(): SyncResult {
         val token = currentAccessToken ?: return SyncResult.Failure("No access token")
-        val machine = OlmMachineManager.olmMachine ?: return SyncResult.Failure("No OlmMachine")
 
         return try {
             val response = client.get("$currentHomeserver/_matrix/client/v3/sync") {
@@ -335,7 +334,7 @@ sealed class SyncResult {
 /**
  * Main sync function that orchestrates the sync process using modular components
  */
-suspend fun syncAndProcessToDevice(timeout: ULong = 30000UL): Boolean {
+suspend fun syncAndProcessToDevice(): Boolean {
     println("🔄 SYNC FUNCTION CALLED: syncAndProcessToDevice starting")
 
     val syncHandler = SyncResponseHandler()

@@ -80,8 +80,9 @@ fun LoginWindow(onLoginSuccess: () -> Unit) {
     }
 }
 
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
-fun MatrixApp(windowManager: WindowManager, backgroundScope: CoroutineScope, onLogout: () -> Unit = {}) {
+fun MatrixApp(windowManager: WindowManager, onLogout: () -> Unit = {}) {
     // Use rememberCoroutineScope for composition-aware coroutines
     val appScope = rememberCoroutineScope()
     var isLoggedIn by remember { mutableStateOf(false) }

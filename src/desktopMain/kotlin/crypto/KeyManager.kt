@@ -23,6 +23,15 @@ import kotlinx.serialization.json.JsonElement
 
 suspend fun hasRoomKey(roomId: String): Boolean {
     val machine = OlmMachineManager.olmMachine ?: return false
+
+    // Get room members to check if multi-device
+    val roomMembers = network.getRoomMembers(roomId)
+    val isMultiDevice = crypto.isMultiDeviceRoom(roomMembers)
+
+    if (!isMultiDevice) {
+        return false // No room keys in single-device rooms
+    }
+
     return try {
         // First check if we can encrypt (outbound capability)
         val messageContent = """{"msgtype":"m.text","body":${JsonPrimitive("test")}}"""
@@ -37,6 +46,16 @@ suspend fun hasRoomKey(roomId: String): Boolean {
 // Public function to check if we can encrypt messages for a room
 suspend fun canEncryptRoom(roomId: String): Boolean {
     val machine = OlmMachineManager.olmMachine ?: return false
+
+    // Get room members to check if multi-device
+    val roomMembers = network.getRoomMembers(roomId)
+    val isMultiDevice = crypto.isMultiDeviceRoom(roomMembers)
+
+    if (!isMultiDevice) {
+        return false // Cannot encrypt in single-device rooms
+    }
+
+    // For multi-device rooms, check if we can actually encrypt
     return try {
         val messageContent = """{"msgtype":"m.text","body":${JsonPrimitive("test")}}"""
         machine.encrypt(roomId, "m.room.message", messageContent)

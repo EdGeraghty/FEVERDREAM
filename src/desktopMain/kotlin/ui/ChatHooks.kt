@@ -21,7 +21,7 @@ fun useMessageCache(roomId: String, currentMessages: List<Event>, isLoading: Boo
     LaunchedEffect(roomId) {
         while (true) {
             try {
-                val cachedMessages = crypto.MessageCacheManager.getRoomMessages(roomId) ?: emptyList()
+                val cachedMessages = crypto.MessageCacheManager.getRoomMessages(roomId)
                 if (cachedMessages.size != messages.size && !isLoading) {
                     // Only refresh if we're not currently loading
                     println("🔄 Refreshing messages from cache: ${cachedMessages.size} vs ${messages.size}")
@@ -56,7 +56,7 @@ fun useMessageLoading(roomId: String): MessageLoadingState {
 
                 // Check cache first
                 val cachedMessages = crypto.MessageCacheManager.getRoomMessages(roomId)
-                if (cachedMessages != null && cachedMessages.isNotEmpty()) {
+                if (cachedMessages.isNotEmpty()) {
                     println("📋 ChatScreen: Using cached messages: ${cachedMessages.size}")
                     messages = cachedMessages.toList()
                     isLoading = false
@@ -79,7 +79,7 @@ fun useMessageLoading(roomId: String): MessageLoadingState {
                 println("🔄 ChatScreen: Set isLoading = false due to timeout")
                 // Show empty messages or cached if available
                 val cachedMessages = crypto.MessageCacheManager.getRoomMessages(roomId)
-                if (cachedMessages != null) {
+                if (cachedMessages.isNotEmpty()) {
                     messages = cachedMessages.toList()
                     println("📋 ChatScreen: Fallback to cached messages after timeout: ${cachedMessages.size}")
                 }
@@ -110,7 +110,7 @@ fun useMessageLoading(roomId: String): MessageLoadingState {
             isLoading = false
             // Try to use cached messages if available
             val cachedMessages = crypto.MessageCacheManager.getRoomMessages(roomId)
-            if (cachedMessages != null) {
+            if (cachedMessages.isNotEmpty()) {
                 messages = cachedMessages.toList()
                 println("📋 Used cached messages after cancel: ${cachedMessages.size}")
             }

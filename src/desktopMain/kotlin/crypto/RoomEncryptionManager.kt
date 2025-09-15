@@ -192,17 +192,6 @@ class RoomKeySharingManager(private val machine: OlmMachine) {
             println("🔑 Room members count: ${roomMembers.size}")
             println("🔑 Room members: $roomMembers")
 
-            val encryptionSettings = EncryptionSettings(
-                algorithm = EventEncryptionAlgorithm.MEGOLM_V1_AES_SHA2,
-                rotationPeriod = 604800uL, // 7 days in seconds (was 604800000uL milliseconds)
-                rotationPeriodMsgs = 100uL,
-                historyVisibility = HistoryVisibility.SHARED,
-                onlyAllowTrustedDevices = false,
-                errorOnVerifiedUserProblem = false
-            )
-
-            println("🔑 Encryption settings created successfully")
-
             // Create the outbound session first
             val sessionInitContent = """{"msgtype":"m.text","body":${JsonPrimitive("session_init")}}"""
             machine.encrypt(roomId, "m.room.message", sessionInitContent)
@@ -405,7 +394,6 @@ suspend fun isRoomEncrypted(roomId: String): Boolean {
 }
 
 suspend fun ensureRoomEncryption(roomId: String): Boolean {
-    val token = currentAccessToken ?: return false
     val machine = OlmMachineManager.olmMachine ?: return false
 
     val encryptionChecker = RoomEncryptionChecker()
@@ -431,6 +419,31 @@ suspend fun ensureRoomEncryption(roomId: String): Boolean {
         println("📋 Got ${initialRequests.size} initial requests from OlmMachine")
         requestProcessor.processOutgoingRequests(initialRequests)
 
+        // Check if this is a multi-device setup
+        val isMultiDevice = isMultiDeviceRoom(allRoomMembers)
+        println("🔍 Room $roomId is multi-device: $isMultiDevice")
+
+        if (isMultiDevice) {
+            // Try to create outbound session for multi-device rooms
+            try {
+                val messageContent = """{"msgtype":"m.text","body":${JsonPrimitive("new_session_test")}}"""
+                machine.encrypt(roomId, "m.room.message", messageContent)
+                println("✅ New outbound session is working")
+            } catch (e: Exception) {
+                println("⚠️  New session not working: ${e.message}")
+                // Try to create and share room key
+                val roomKeySharingManager = RoomKeySharingManager(machine)
+                val sessionRenewalSuccess = roomKeySharingManager.createAndShareRoomKey(roomId, allRoomMembers)
+                if (sessionRenewalSuccess) {
+                    println("✅ Session creation successful")
+                } else {
+                    println("❌ Session creation failed")
+                }
+            }
+        } else {
+            println("ℹ️  Single-device room - encryption setup complete but cannot encrypt new messages")
+        }
+
         println("✅ Room encryption setup completed for $roomId")
         return true
     } catch (e: Exception) {
@@ -443,4 +456,21 @@ suspend fun handleMissingSessions(missingSessionsRequest: Request.KeysClaim): Bo
     val machine = OlmMachineManager.olmMachine ?: return false
     val sessionManager = SessionManager(machine)
     return sessionManager.handleMissingSessions(missingSessionsRequest)
+}
+
+suspend fun isMultiDeviceRoom(roomMembers: List<String>): Boolean {
+    val machine = OlmMachineManager.olmMachine ?: return false
+
+    for (userId in roomMembers) {
+        try {
+            val devices = machine.getUserDevices(userId, 10000u) // 10 second timeout
+            if (devices.size > 1) {
+                println("🔍 User $userId has ${devices.size} devices")
+                return true
+            }
+        } catch (e: Exception) {
+            println("⚠️  Error checking devices for $userId: ${e.message}")
+        }
+    }
+    return false
 }

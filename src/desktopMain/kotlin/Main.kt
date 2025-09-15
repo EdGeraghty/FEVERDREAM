@@ -36,9 +36,6 @@ fun main() = application {
         }
     }
 
-    // Global scope for background tasks like periodic sync
-    val backgroundScope = rememberCoroutineScope { Dispatchers.IO + SupervisorJob() }
-
     // Shared state for managing multiple windows
     val windowManager = remember { WindowManager() }
     var showLoginWindow by remember { mutableStateOf(true) }
@@ -74,7 +71,7 @@ fun main() = application {
             // Close settings window
             windowManager.closeSettingsWindow()
         }, title = "FEVERDREAM - Matrix Client") {
-            MatrixApp(windowManager, backgroundScope, onLogout = { showLoginWindow = true })
+            MatrixApp(windowManager, onLogout = { showLoginWindow = true })
         }
     }
 
