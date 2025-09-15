@@ -231,7 +231,9 @@ class MessageSender {
         return try {
             // Properly construct message content as JSON
             val messageContent = """{"msgtype":"m.text","body":${JsonPrimitive(message)}}"""
-            val encryptedContent = machine.encrypt(roomId, "m.room.message", messageContent)
+            val encryptedContent = withTimeout(1000L) { // 1 second timeout for encryption
+                machine.encrypt(roomId, "m.room.message", messageContent)
+            }
 
             // Send as encrypted message
             val encryptedRequest = JsonObject(mapOf(
@@ -239,10 +241,12 @@ class MessageSender {
                 "content" to json.parseToJsonElement(encryptedContent)
             ))
 
-            val response = client.put("$currentHomeserver/_matrix/client/v3/rooms/$roomId/send/m.room.encrypted/${System.currentTimeMillis()}") {
-                bearerAuth(token)
-                contentType(ContentType.Application.Json)
-                setBody(encryptedRequest)
+            val response = withTimeout(1000L) { // 1 second timeout for HTTP request
+                client.put("$currentHomeserver/_matrix/client/v3/rooms/$roomId/send/m.room.encrypted/${System.currentTimeMillis()}") {
+                    bearerAuth(token)
+                    contentType(ContentType.Application.Json)
+                    setBody(encryptedRequest)
+                }
             }
 
             val success = response.status == HttpStatusCode.OK
@@ -252,6 +256,10 @@ class MessageSender {
                 println("❌ MessageSender: Failed to send encrypted message: ${response.status}")
             }
             success
+        } catch (encryptException: TimeoutCancellationException) {
+            println("❌ MessageSender: Encryption timed out after 1 second")
+            // Don't fall back to unencrypted - return failure for security
+            false
         } catch (encryptException: Exception) {
             println("⚠️  MessageSender: Encryption failed: ${encryptException.message}")
 

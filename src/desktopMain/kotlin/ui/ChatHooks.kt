@@ -198,11 +198,11 @@ fun useMessageSendLogic(roomId: String, onMessageSent: () -> Unit): MessageSendL
         println("🔘 Send button clicked, message: '$messageText'")
         if (messageText.isNotBlank()) {
             println("📤 Starting send message process...")
-            scope.launch {
-                isSending = true
-                errorMessage = null // Clear any previous error
-                println("🔄 Set isSending = true")
+            scope.launch(Dispatchers.IO) {
                 try {
+                    isSending = true
+                    errorMessage = null // Clear any previous error
+                    println("🔄 Set isSending = true")
                     // Quick check: see if we can encrypt without full setup
                     val canEncrypt = crypto.canEncryptRoom(roomId)
                     if (canEncrypt) {
@@ -214,7 +214,9 @@ fun useMessageSendLogic(roomId: String, onMessageSent: () -> Unit): MessageSendL
                     if (canEncrypt) {
                         // Skip encryption setup - we've already verified it's available
                         println("📤 Calling sendMessage (skipping encryption setup)...")
-                        val sendResult = sendMessage(roomId, messageText, skipEncryptionSetup = true)
+                        val sendResult = withTimeout(1000L) { // 1 second timeout
+                            sendMessage(roomId, messageText, skipEncryptionSetup = true)
+                        }
                         println("📤 sendMessage returned: $sendResult")
 
                         if (sendResult) {
@@ -239,7 +241,9 @@ fun useMessageSendLogic(roomId: String, onMessageSent: () -> Unit): MessageSendL
                             kotlinx.coroutines.delay(2000)
 
                             println("📤 Calling sendMessage...")
-                            val sendResult = sendMessage(roomId, messageText)
+                            val sendResult = withTimeout(1000L) { // 1 second timeout
+                                sendMessage(roomId, messageText)
+                            }
                             println("📤 sendMessage returned: $sendResult")
 
                             if (sendResult) {
@@ -255,12 +259,16 @@ fun useMessageSendLogic(roomId: String, onMessageSent: () -> Unit): MessageSendL
                         }
                     }
                 } catch (e: TimeoutCancellationException) {
-                    println("❌ ensureRoomEncryption timed out after 15 seconds")
+                    println("❌ ensureRoomEncryption timed out after 1 second")
                     errorMessage = "Encryption setup timed out. Message not sent."
                 } catch (e: Exception) {
                     println("❌ Error during message sending: ${e.message}")
-                    e.printStackTrace()
-                    errorMessage = "Error during message sending: ${e.message}"
+                    if (e.message?.contains("timeout") == true || e is TimeoutCancellationException) {
+                        errorMessage = "Message sending timed out. Please try again."
+                    } else {
+                        e.printStackTrace()
+                        errorMessage = "Error during message sending: ${e.message}"
+                    }
                 } finally {
                     println("🔄 Resetting isSending to false")
                     isSending = false
