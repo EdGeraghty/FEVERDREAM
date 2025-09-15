@@ -125,6 +125,18 @@ data class AuthDict(
 )
 
 @Serializable
+data class UIAFlows(
+    val stages: List<String>
+)
+
+@Serializable
+data class UIAChallenge(
+    val session: String,
+    val flows: List<UIAFlows>,
+    val params: JsonObject? = null
+)
+
+@Serializable
 data class RoomMembersResponse(val chunk: List<MemberEvent>)
 
 @Serializable

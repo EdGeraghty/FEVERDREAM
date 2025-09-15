@@ -17,6 +17,8 @@ import crypto.*
 import network.*
 import models.DeviceInfo
 import models.DevicesResponse
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 
 /**
  * Handles key backup enable/disable and restore operations
@@ -551,10 +553,10 @@ fun ActiveSessionsSection(scope: CoroutineScope) {
         DeleteDeviceDialog(
             device = device,
             onDismiss = { showDeleteDialog = null },
-            onConfirm = { confirmedDevice ->
+            onConfirm = { confirmedDevice, password ->
                 scope.launch {
                     try {
-                        val success = deleteDevice(confirmedDevice.device_id)
+                        val success = deleteDevice(confirmedDevice.device_id, password)
                         if (success) {
                             devices = devices.filter { it.device_id != confirmedDevice.device_id }
                             statusMessage = "Device deleted successfully"
@@ -667,14 +669,17 @@ fun DeviceItem(
 }
 
 /**
- * Dialog for deleting a device
+ * Dialog for deleting a device with password authentication
  */
 @Composable
 fun DeleteDeviceDialog(
     device: DeviceInfo,
     onDismiss: () -> Unit,
-    onConfirm: (DeviceInfo) -> Unit
+    onConfirm: (DeviceInfo, String) -> Unit
 ) {
+    var password by remember { mutableStateOf("") }
+    var showPassword by remember { mutableStateOf(false) }
+
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Delete Device") },
@@ -694,15 +699,35 @@ fun DeleteDeviceDialog(
                         style = MaterialTheme.typography.body2
                     )
                 }
+
+                Spacer(modifier = Modifier.height(16.dp))
+                Text("Enter your password to confirm deletion:", style = MaterialTheme.typography.body2)
+                Spacer(modifier = Modifier.height(8.dp))
+
+                OutlinedTextField(
+                    value = password,
+                    onValueChange = { password = it },
+                    label = { Text("Password") },
+                    visualTransformation = if (showPassword) VisualTransformation.None else PasswordVisualTransformation(),
+                    trailingIcon = {
+                        IconButton(onClick = { showPassword = !showPassword }) {
+                            Text(if (showPassword) "🙈" else "👁️", style = MaterialTheme.typography.button)
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                )
             }
         },
         confirmButton = {
-            Button(onClick = { onConfirm(device) }) {
-                Text("Delete")
+            Button(
+                onClick = { onConfirm(device, password) },
+                enabled = password.isNotBlank()
+            ) {
+                Text("Delete Device")
             }
         },
         dismissButton = {
-            Button(onClick = onDismiss) {
+            TextButton(onClick = onDismiss) {
                 Text("Cancel")
             }
         }
