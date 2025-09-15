@@ -6,6 +6,11 @@ import network.currentSyncToken
 import network.currentUserId
 import network.currentDeviceId
 import network.getRoomMembers
+import network.saveSession
+import models.SessionData
+import network.anyToJsonElement
+import network.convertMapToHashMap
+import crypto.OlmMachineManager
 
 import io.ktor.client.call.*
 import io.ktor.client.statement.*
@@ -171,14 +176,20 @@ class RoomKeySharingManager(private val machine: OlmMachine) {
 
         return try {
             println("🔑 Creating new outbound session for room $roomId")
+            println("🔑 Room members count: ${roomMembers.size}")
+            println("🔑 Room members: $roomMembers")
+
             val encryptionSettings = EncryptionSettings(
                 algorithm = EventEncryptionAlgorithm.MEGOLM_V1_AES_SHA2,
-                rotationPeriod = 604800000uL, // 7 days in milliseconds
+                rotationPeriod = 604800uL, // 7 days in seconds (was 604800000uL milliseconds)
                 rotationPeriodMsgs = 100uL,
                 historyVisibility = HistoryVisibility.SHARED,
                 onlyAllowTrustedDevices = false,
                 errorOnVerifiedUserProblem = false
             )
+
+            println("🔑 Encryption settings created successfully")
+            println("🔑 Calling machine.shareRoomKey...")
 
             val shareRequests = machine.shareRoomKey(roomId, roomMembers, encryptionSettings)
             println("🔑 Generated ${shareRequests.size} room key share requests")
@@ -191,6 +202,8 @@ class RoomKeySharingManager(private val machine: OlmMachine) {
             true
         } catch (e: Exception) {
             println("❌ Failed to create new outbound session: ${e.message}")
+            println("❌ Exception type: ${e::class.simpleName}")
+            e.printStackTrace()
             false
         }
     }
