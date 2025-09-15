@@ -1,6 +1,8 @@
 package ui
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
@@ -380,7 +382,8 @@ fun SettingsScreen(
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(16.dp),
+                .padding(16.dp)
+                .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             // Key Backup Section
@@ -512,15 +515,22 @@ fun ActiveSessionsSection(scope: CoroutineScope) {
             if (devices.isEmpty() && !isLoading) {
                 Text("No devices found", style = MaterialTheme.typography.body2)
             } else {
-                devices.forEach { device ->
-                    DeviceItem(
-                        device = device,
-                        isCurrentDevice = device.device_id == currentDeviceId,
-                        onDelete = { showDeleteDialog = device },
-                        onRename = { showRenameDialog = device }
-                    )
-                    if (device != devices.last()) {
-                        Divider(modifier = Modifier.padding(vertical = 8.dp))
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 400.dp) // Limit height to enable scrolling
+                        .verticalScroll(rememberScrollState())
+                ) {
+                    devices.forEach { device ->
+                        DeviceItem(
+                            device = device,
+                            isCurrentDevice = device.device_id == currentDeviceId,
+                            onDelete = { showDeleteDialog = device },
+                            onRename = { showRenameDialog = device }
+                        )
+                        if (device != devices.last()) {
+                            Divider(modifier = Modifier.padding(vertical = 8.dp))
+                        }
                     }
                 }
             }
