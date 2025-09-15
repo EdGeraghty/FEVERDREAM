@@ -4,7 +4,7 @@
 		{
 			"label": "build",
 			"type": "shell",
-			"command": "./gradlew build"
+			"command": "JAVA_HOME=/opt/homebrew/opt/openjdk@17 ./gradlew build"
 		},
 		{
 			"label": "run",
@@ -19,6 +19,13 @@
 			"label": "run",
 			"type": "shell",
 			"command": "./gradlew run"
+		},
+		{
+			"label": "build",
+			"type": "shell",
+			"command": "JAVA_HOME=/opt/homebrew/opt/openjdk@17 ./gradlew build",
+			"args": [],
+			"group": "build"
 		}
 	]
 }
