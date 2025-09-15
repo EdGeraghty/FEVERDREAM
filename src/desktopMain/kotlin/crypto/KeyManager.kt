@@ -1,6 +1,8 @@
 package crypto
 
 import network.currentUserId
+import network.json
+import crypto.OlmMachineManager
 
 import io.ktor.client.call.*
 import io.ktor.client.request.*
@@ -24,7 +26,8 @@ suspend fun hasRoomKey(roomId: String): Boolean {
     return try {
         // First check if we can encrypt (outbound capability)
         val canEncrypt = try {
-            machine.encrypt(roomId, "m.room.message", """{"msgtype": "m.text", "body": "test"}""")
+            val messageContent = """{"msgtype":"m.text","body":${JsonPrimitive("test")}}"""
+            machine.encrypt(roomId, "m.room.message", messageContent)
             true
         } catch (e: Exception) {
             println("⚠️  Cannot encrypt for room $roomId: ${e.message}")
@@ -38,13 +41,15 @@ suspend fun hasRoomKey(roomId: String): Boolean {
         // Test if we can decrypt our own messages (basic crypto functionality test)
         // Note: This doesn't guarantee we can decrypt messages from other devices
         val eventId = "\$test:${System.currentTimeMillis()}"
+        val testMessageContent = """{"msgtype":"m.text","body":${JsonPrimitive("test")}}"""
+        val encryptedContent = machine.encrypt(roomId, "m.room.message", testMessageContent)
         val testEventJson = """{
             "type": "m.room.encrypted",
             "event_id": "$eventId",
             "sender": "${currentUserId ?: "@test:example.com"}",
             "origin_server_ts": ${System.currentTimeMillis()},
             "room_id": "$roomId",
-            "content": ${machine.encrypt(roomId, "m.room.message", """{"msgtype": "m.text", "body": "test"}""")}
+            "content": $encryptedContent
         }"""
 
         val decryptionSettings = DecryptionSettings(senderDeviceTrustRequirement = TrustRequirement.UNTRUSTED)
@@ -75,7 +80,8 @@ suspend fun hasRoomKey(roomId: String): Boolean {
 
                     // Test encryption again to ensure session is truly ready
                     try {
-                        machine.encrypt(roomId, "m.room.message", """{"msgtype": "m.text", "body": "final_test"}""")
+                        val messageContent = """{"msgtype":"m.text","body":${JsonPrimitive("final_test")}}"""
+                        machine.encrypt(roomId, "m.room.message", messageContent)
                         println("✅ Session fully ready after renewal")
                     } catch (finalTestException: Exception) {
                         println("⚠️  Session still not ready after delay: ${finalTestException.message}")
@@ -84,7 +90,8 @@ suspend fun hasRoomKey(roomId: String): Boolean {
 
                     // Test again after comprehensive renewal and delay
                     return try {
-                        machine.encrypt(roomId, "m.room.message", """{"msgtype": "m.text", "body": "test_after_renewal"}""")
+                        val messageContent = """{"msgtype":"m.text","body":${JsonPrimitive("test_after_renewal")}}"""
+                        machine.encrypt(roomId, "m.room.message", messageContent)
                         println("✅ Session renewal successful with delay")
                         true
                     } catch (retryException: Exception) {
@@ -110,7 +117,8 @@ suspend fun hasRoomKey(roomId: String): Boolean {
 suspend fun canEncryptRoom(roomId: String): Boolean {
     val machine = OlmMachineManager.olmMachine ?: return false
     return try {
-        machine.encrypt(roomId, "m.room.message", """{"msgtype": "m.text", "body": "test"}""")
+        val messageContent = """{"msgtype":"m.text","body":${JsonPrimitive("test")}}"""
+        machine.encrypt(roomId, "m.room.message", messageContent)
         true
     } catch (e: Exception) {
         println("⚠️  Encryption test failed: ${e.message}")
@@ -127,7 +135,8 @@ suspend fun canEncryptRoom(roomId: String): Boolean {
 
                     // Test encryption again to ensure session is truly ready
                     try {
-                        machine.encrypt(roomId, "m.room.message", """{"msgtype": "m.text", "body": "final_test"}""")
+                        val messageContent = """{"msgtype":"m.text","body":${JsonPrimitive("final_test")}}"""
+                        machine.encrypt(roomId, "m.room.message", messageContent)
                         println("✅ Session fully ready after renewal")
                     } catch (finalTestException: Exception) {
                         println("⚠️  Session still not ready after delay: ${finalTestException.message}")
@@ -136,7 +145,8 @@ suspend fun canEncryptRoom(roomId: String): Boolean {
 
                     // Test again after comprehensive renewal and delay
                     return try {
-                        machine.encrypt(roomId, "m.room.message", """{"msgtype": "m.text", "body": "test_after_renewal"}""")
+                        val messageContent = """{"msgtype":"m.text","body":${JsonPrimitive("test_after_renewal")}}"""
+                        machine.encrypt(roomId, "m.room.message", messageContent)
                         println("✅ Session renewed successfully with delay")
                         true
                     } catch (retryException: Exception) {

@@ -10,6 +10,7 @@ import network.saveSession
 import models.SessionData
 import network.anyToJsonElement
 import network.convertMapToHashMap
+import network.json
 import crypto.OlmMachineManager
 
 import io.ktor.client.call.*
@@ -299,7 +300,8 @@ class RoomKeySharingManager(private val machine: OlmMachine) {
 
     private suspend fun testEncryptionAfterSharing(roomId: String) {
         try {
-            machine.encrypt(roomId, "m.room.message", """{"msgtype": "m.text", "body": "session_test_after_sharing"}""")
+            val messageContent = """{"msgtype":"m.text","body":${JsonPrimitive("session_test_after_sharing")}}"""
+            machine.encrypt(roomId, "m.room.message", messageContent)
             println("✅ New outbound session created and working")
         } catch (testException: Exception) {
             println("⚠️  Session still not working after sharing: ${testException.message}")
@@ -415,10 +417,30 @@ suspend fun ensureRoomEncryption(roomId: String): Boolean {
 
         // Test if the new session works
         try {
-            machine.encrypt(roomId, "m.room.message", """{"msgtype": "m.text", "body": "new_session_test"}""")
+            val messageContent = """{"msgtype":"m.text","body":${JsonPrimitive("new_session_test")}}"""
+            machine.encrypt(roomId, "m.room.message", messageContent)
             println("✅ New outbound session is working")
         } catch (e: Exception) {
             println("⚠️  New session still not working: ${e.message}")
+            // If encryption fails, try to create a new outbound session
+            if (e.message?.contains("session") == true || e.message?.contains("expired") == true) {
+                println("🔄 Creating new outbound session...")
+                val roomKeySharingManager = RoomKeySharingManager(machine)
+                val sessionRenewalSuccess = roomKeySharingManager.createAndShareRoomKey(roomId, allRoomMembers)
+                if (sessionRenewalSuccess) {
+                    println("✅ Session renewal successful")
+                    // Test encryption again after session renewal
+                    try {
+                        val messageContent = """{"msgtype":"m.text","body":${JsonPrimitive("session_test_after_renewal")}}"""
+                        machine.encrypt(roomId, "m.room.message", messageContent)
+                        println("✅ Session working after renewal")
+                    } catch (renewalTestException: Exception) {
+                        println("⚠️  Session still not working after renewal: ${renewalTestException.message}")
+                    }
+                } else {
+                    println("❌ Session renewal failed")
+                }
+            }
         }
 
         println("✅ Room encryption setup completed for $roomId")

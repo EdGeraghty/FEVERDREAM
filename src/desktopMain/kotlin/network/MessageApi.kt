@@ -207,7 +207,8 @@ class MessageSender {
 
         // Try to encrypt the message
         return try {
-            val messageContent = """{"msgtype": "m.text", "body": "$message"}"""
+            // Properly construct message content as JSON
+            val messageContent = """{"msgtype":"m.text","body":${JsonPrimitive(message)}}"""
             val encryptedContent = machine.encrypt(roomId, "m.room.message", messageContent)
 
             // Send as encrypted message
@@ -239,7 +240,8 @@ class MessageSender {
                 if (retryEncryptionSetup) {
                     // Retry encryption with renewed session
                     return try {
-                        val messageContent = """{"msgtype": "m.text", "body": "$message"}"""
+                        // Properly construct message content as JSON
+                        val messageContent = """{"msgtype":"m.text","body":${JsonPrimitive(message)}}"""
                         val encryptedContent = machine.encrypt(roomId, "m.room.message", messageContent)
 
                         val encryptedRequest = JsonObject(mapOf(
