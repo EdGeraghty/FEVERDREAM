@@ -192,6 +192,7 @@ data class MessageInputState(
 fun useMessageSendLogic(roomId: String, onMessageSent: () -> Unit): MessageSendLogicState {
     val scope = rememberCoroutineScope()
     var isSending by remember { mutableStateOf(false) }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
 
     val sendMessageAction: (String) -> Unit = { messageText ->
         println("🔘 Send button clicked, message: '$messageText'")
@@ -199,6 +200,7 @@ fun useMessageSendLogic(roomId: String, onMessageSent: () -> Unit): MessageSendL
             println("📤 Starting send message process...")
             scope.launch {
                 isSending = true
+                errorMessage = null // Clear any previous error
                 println("🔄 Set isSending = true")
                 try {
                     // Quick check: see if we can encrypt without full setup
@@ -220,6 +222,7 @@ fun useMessageSendLogic(roomId: String, onMessageSent: () -> Unit): MessageSendL
                             onMessageSent()
                         } else {
                             println("❌ Message sending failed")
+                            errorMessage = "Failed to send encrypted message. Please try again."
                         }
                     } else {
                         // Only do full encryption setup if needed
@@ -244,16 +247,20 @@ fun useMessageSendLogic(roomId: String, onMessageSent: () -> Unit): MessageSendL
                                 onMessageSent()
                             } else {
                                 println("❌ Message sending failed")
+                                errorMessage = "Failed to send encrypted message. Please try again."
                             }
                         } else {
                             println("❌ ensureRoomEncryption failed, not sending message")
+                            errorMessage = "Encryption setup failed. Message not sent."
                         }
                     }
                 } catch (e: TimeoutCancellationException) {
                     println("❌ ensureRoomEncryption timed out after 15 seconds")
+                    errorMessage = "Encryption setup timed out. Message not sent."
                 } catch (e: Exception) {
                     println("❌ Error during message sending: ${e.message}")
                     e.printStackTrace()
+                    errorMessage = "Error during message sending: ${e.message}"
                 } finally {
                     println("🔄 Resetting isSending to false")
                     isSending = false
@@ -266,13 +273,15 @@ fun useMessageSendLogic(roomId: String, onMessageSent: () -> Unit): MessageSendL
 
     return MessageSendLogicState(
         isSending = isSending,
-        sendMessage = sendMessageAction
+        sendMessage = sendMessageAction,
+        errorMessage = errorMessage
     )
 }
 
 data class MessageSendLogicState(
     val isSending: Boolean,
-    val sendMessage: (String) -> Unit
+    val sendMessage: (String) -> Unit,
+    val errorMessage: String?
 )
 /**
  * Custom hook for managing chat messages state, loading, and periodic refresh
@@ -324,7 +333,8 @@ fun useMessageSending(roomId: String): MessageSendingState {
         newMessage = inputState.newMessage,
         isSending = sendLogicState.isSending,
         onMessageChange = inputState.onMessageChange,
-        sendMessage = { sendLogicState.sendMessage(inputState.newMessage) }
+        sendMessage = { sendLogicState.sendMessage(inputState.newMessage) },
+        errorMessage = sendLogicState.errorMessage
     )
 }
 
@@ -335,5 +345,6 @@ data class MessageSendingState(
     val newMessage: String,
     val isSending: Boolean,
     val onMessageChange: (String) -> Unit,
-    val sendMessage: () -> Unit
+    val sendMessage: () -> Unit,
+    val errorMessage: String?
 )

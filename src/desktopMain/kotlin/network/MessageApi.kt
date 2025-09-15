@@ -230,8 +230,48 @@ class MessageSender {
             }
             success
         } catch (encryptException: Exception) {
-            println("⚠️  MessageSender: Encryption failed: ${encryptException.message}, falling back to unencrypted message")
-            sendUnencryptedMessage(roomId, message, token)
+            println("⚠️  MessageSender: Encryption failed: ${encryptException.message}")
+
+            // If encryption failed due to session issues, try to renew the session once
+            if (!skipEncryptionSetup && encryptException.message?.contains("session") == true) {
+                println("🔄 Attempting session renewal before fallback...")
+                val retryEncryptionSetup = ensureRoomEncryption(roomId)
+                if (retryEncryptionSetup) {
+                    // Retry encryption with renewed session
+                    return try {
+                        val messageContent = """{"msgtype": "m.text", "body": "$message"}"""
+                        val encryptedContent = machine.encrypt(roomId, "m.room.message", messageContent)
+
+                        val encryptedRequest = JsonObject(mapOf(
+                            "type" to JsonPrimitive("m.room.encrypted"),
+                            "content" to json.parseToJsonElement(encryptedContent)
+                        ))
+
+                        val response = client.put("$currentHomeserver/_matrix/client/v3/rooms/$roomId/send/m.room.encrypted/${System.currentTimeMillis()}") {
+                            bearerAuth(token)
+                            contentType(ContentType.Application.Json)
+                            setBody(encryptedRequest)
+                        }
+
+                        val success = response.status == HttpStatusCode.OK
+                        if (success) {
+                            println("🔐 MessageSender: Encrypted message sent successfully after session renewal")
+                        } else {
+                            println("❌ MessageSender: Failed to send encrypted message after renewal: ${response.status}")
+                        }
+                        success
+                    } catch (retryException: Exception) {
+                        println("⚠️  MessageSender: Encryption still failed after session renewal: ${retryException.message}")
+                        // Don't fall back to unencrypted - return failure instead
+                        println("🚫 MessageSender: Refusing to send unencrypted message in encrypted room")
+                        false
+                    }
+                }
+            }
+
+            // Don't fall back to unencrypted message - return failure for security
+            println("🚫 MessageSender: Refusing to send unencrypted message in encrypted room")
+            false
         }
     }
 

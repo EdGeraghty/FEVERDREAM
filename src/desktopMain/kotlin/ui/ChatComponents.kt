@@ -99,37 +99,49 @@ fun MessageInput(
     modifier: Modifier = Modifier
 ) {
     println("📝 MessageInput component rendered")
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(16.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        OutlinedTextField(
-            value = messageSendingState.newMessage,
-            onValueChange = messageSendingState.onMessageChange,
-            label = { Text("Message") },
-            modifier = Modifier.weight(1f),
-            enabled = !messageSendingState.isSending
-        )
-        Spacer(modifier = Modifier.width(8.dp))
-        IconButton(
-            onClick = onRefresh,
-            enabled = !messageSendingState.isSending
-        ) {
-            Icon(Icons.Default.Refresh, contentDescription = "Refresh messages")
+    Column(modifier = modifier.fillMaxWidth()) {
+        // Show error message if present
+        messageSendingState.errorMessage?.let { error ->
+            Text(
+                text = error,
+                color = MaterialTheme.colors.error,
+                style = MaterialTheme.typography.body2,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+            )
         }
-        Spacer(modifier = Modifier.width(8.dp))
-        if (messageSendingState.isSending) {
-            CircularProgressIndicator(modifier = Modifier.size(24.dp))
-        } else {
-            Button(
-                onClick = {
-                    println("🔘 Send button clicked in UI!")
-                    messageSendingState.sendMessage()
-                }
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            OutlinedTextField(
+                value = messageSendingState.newMessage,
+                onValueChange = messageSendingState.onMessageChange,
+                label = { Text("Message") },
+                modifier = Modifier.weight(1f),
+                enabled = !messageSendingState.isSending
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            IconButton(
+                onClick = onRefresh,
+                enabled = !messageSendingState.isSending
             ) {
-                Text("Send")
+                Icon(Icons.Default.Refresh, contentDescription = "Refresh messages")
+            }
+            Spacer(modifier = Modifier.width(8.dp))
+            if (messageSendingState.isSending) {
+                CircularProgressIndicator(modifier = Modifier.size(24.dp))
+            } else {
+                Button(
+                    onClick = {
+                        println("🔘 Send button clicked in UI!")
+                        messageSendingState.sendMessage()
+                    }
+                ) {
+                    Text("Send")
+                }
             }
         }
     }
