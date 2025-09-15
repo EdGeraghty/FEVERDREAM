@@ -25,7 +25,9 @@ suspend fun hasRoomKey(roomId: String): Boolean {
     val machine = OlmMachineManager.olmMachine ?: return false
 
     // Get room members to check if multi-device
-    val roomMembers = network.getRoomMembers(roomId)
+    val roomMembers = withTimeout(10000L) {
+        network.getRoomMembers(roomId)
+    }
     val isMultiDevice = crypto.isMultiDeviceRoom(roomMembers)
 
     if (!isMultiDevice) {
@@ -48,7 +50,9 @@ suspend fun canEncryptRoom(roomId: String): Boolean {
     val machine = OlmMachineManager.olmMachine ?: return false
 
     // Get room members to check if multi-device
-    val roomMembers = network.getRoomMembers(roomId)
+    val roomMembers = withTimeout(10000L) {
+        network.getRoomMembers(roomId)
+    }
     val isMultiDevice = crypto.isMultiDeviceRoom(roomMembers)
 
     if (!isMultiDevice) {

@@ -407,7 +407,9 @@ suspend fun ensureRoomEncryption(roomId: String): Boolean {
         }
 
         // Get room members
-        val allRoomMembers = getRoomMembers(roomId)
+        val allRoomMembers = withTimeout(10000L) {
+            getRoomMembers(roomId)
+        }
         println("🔍 Room members: $allRoomMembers")
 
         // Update tracked users to ensure OlmMachine knows about them

@@ -108,8 +108,10 @@ suspend fun rejectRoomInvite(roomId: String): Boolean {
 suspend fun getRoomMembers(roomId: String): List<String> {
     val token = currentAccessToken ?: return emptyList()
     try {
-        val response = client.get("$currentHomeserver/_matrix/client/v3/rooms/$roomId/members") {
-            bearerAuth(token)
+        val response = withTimeout(10000L) { // 10 second timeout
+            client.get("$currentHomeserver/_matrix/client/v3/rooms/$roomId/members") {
+                bearerAuth(token)
+            }
         }
         if (response.status == HttpStatusCode.OK) {
             val membersResponse = response.body<RoomMembersResponse>()
@@ -119,8 +121,10 @@ suspend fun getRoomMembers(roomId: String): List<String> {
             // If no members found (possibly due to network issues), include current user
             return if (members.isNotEmpty()) members else listOfNotNull(currentUserId)
         }
+    } catch (e: TimeoutCancellationException) {
+        println("❌ getRoomMembers: Request timed out after 10 seconds")
     } catch (e: Exception) {
-        println("Get room members failed: ${e.message}")
+        println("❌ getRoomMembers: Exception: ${e.message}")
     }
     // Fallback: return current user if available
     return listOfNotNull(currentUserId)
