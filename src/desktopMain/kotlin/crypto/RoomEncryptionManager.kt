@@ -431,34 +431,6 @@ suspend fun ensureRoomEncryption(roomId: String): Boolean {
         println("📋 Got ${initialRequests.size} initial requests from OlmMachine")
         requestProcessor.processOutgoingRequests(initialRequests)
 
-        // Test if the new session works
-        try {
-            val messageContent = """{"msgtype":"m.text","body":${JsonPrimitive("new_session_test")}}"""
-            machine.encrypt(roomId, "m.room.message", messageContent)
-            println("✅ New outbound session is working")
-        } catch (e: Exception) {
-            println("⚠️  New session still not working: ${e.message}")
-            // If encryption fails, try to create a new outbound session
-            if (e.message?.contains("session") == true || e.message?.contains("expired") == true) {
-                println("🔄 Creating new outbound session...")
-                val roomKeySharingManager = RoomKeySharingManager(machine)
-                val sessionRenewalSuccess = roomKeySharingManager.createAndShareRoomKey(roomId, allRoomMembers)
-                if (sessionRenewalSuccess) {
-                    println("✅ Session renewal successful")
-                    // Test encryption again after session renewal
-                    try {
-                        val messageContent = """{"msgtype":"m.text","body":${JsonPrimitive("session_test_after_renewal")}}"""
-                        machine.encrypt(roomId, "m.room.message", messageContent)
-                        println("✅ Session working after renewal")
-                    } catch (renewalTestException: Exception) {
-                        println("⚠️  Session still not working after renewal: ${renewalTestException.message}")
-                    }
-                } else {
-                    println("❌ Session renewal failed")
-                }
-            }
-        }
-
         println("✅ Room encryption setup completed for $roomId")
         return true
     } catch (e: Exception) {

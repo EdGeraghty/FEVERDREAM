@@ -203,6 +203,12 @@ class MessageSender {
                 println("⚠️  MessageSender: Failed to set up encryption for room $roomId, sending unencrypted message")
                 return sendUnencryptedMessage(roomId, message, token)
             }
+
+            // Check if we can actually encrypt messages (important for single-device setups)
+            if (!crypto.canEncryptRoom(roomId)) {
+                println("⚠️  MessageSender: Cannot encrypt messages in this room (likely single-device setup), refusing to send")
+                return false
+            }
         }
 
         // Try to encrypt the message
