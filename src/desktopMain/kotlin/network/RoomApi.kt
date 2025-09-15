@@ -113,12 +113,15 @@ suspend fun getRoomMembers(roomId: String): List<String> {
         }
         if (response.status == HttpStatusCode.OK) {
             val membersResponse = response.body<RoomMembersResponse>()
-            return membersResponse.chunk
+            val members = membersResponse.chunk
                 .filter { it.content.membership == "join" }
                 .map { it.state_key }
+            // If no members found (possibly due to network issues), include current user
+            return if (members.isNotEmpty()) members else listOfNotNull(currentUserId)
         }
     } catch (e: Exception) {
         println("Get room members failed: ${e.message}")
     }
-    return emptyList()
+    // Fallback: return current user if available
+    return listOfNotNull(currentUserId)
 }
