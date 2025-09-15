@@ -49,10 +49,12 @@ class KeyRequestTracker {
  */
 class MessageFetcher {
     suspend fun fetchMessagesFromApi(roomId: String, token: String): List<Event> {
-        val response = client.get("$currentHomeserver/_matrix/client/v3/rooms/$roomId/messages") {
-            bearerAuth(token)
-            parameter("limit", "50")
-            parameter("dir", "b")
+        val response = withTimeout(15000L) { // 15 second timeout
+            client.get("$currentHomeserver/_matrix/client/v3/rooms/$roomId/messages") {
+                bearerAuth(token)
+                parameter("limit", "50")
+                parameter("dir", "b")
+            }
         }
 
         return if (response.status == HttpStatusCode.OK) {
@@ -92,11 +94,19 @@ class MessageDecryptor {
 
         println("🔐 MessageDecryptor: Starting decryption process")
 
-        return messages.map { event ->
-            if (event.type == "m.room.encrypted") {
-                decryptSingleMessage(roomId, event)
-            } else {
-                event
+        // Decrypt messages asynchronously on IO dispatcher to avoid blocking UI
+        return withContext(Dispatchers.IO) {
+            coroutineScope {
+                val decryptedMessages = messages.map { event ->
+                    async {
+                        if (event.type == "m.room.encrypted") {
+                            decryptSingleMessage(roomId, event)
+                        } else {
+                            event
+                        }
+                    }
+                }.awaitAll()
+                decryptedMessages
             }
         }
     }
@@ -117,24 +127,27 @@ class MessageDecryptor {
                 return createUndecryptableEvent(event, "Malformed encrypted event (missing algorithm or ciphertext)")
             }
 
-            // Use proper OlmMachine decryption
-            val decryptionSettings = uniffi.matrix_sdk_crypto.DecryptionSettings(
-                senderDeviceTrustRequirement = uniffi.matrix_sdk_crypto.TrustRequirement.UNTRUSTED
-            )
+            // Add timeout to decryption to prevent hanging
+            val decryptedEvent = withTimeout(5000L) { // 5 second timeout per message
+                // Use proper OlmMachine decryption
+                val decryptionSettings = uniffi.matrix_sdk_crypto.DecryptionSettings(
+                    senderDeviceTrustRequirement = uniffi.matrix_sdk_crypto.TrustRequirement.UNTRUSTED
+                )
 
-            val decryptedEvent = crypto.OlmMachineManager.olmMachine!!.decryptRoomEvent(
-                roomId = roomId,
-                event = JsonObject(mapOf(
-                    "type" to JsonPrimitive(event.type),
-                    "event_id" to JsonPrimitive(event.event_id),
-                    "sender" to JsonPrimitive(event.sender),
-                    "origin_server_ts" to JsonPrimitive(event.origin_server_ts),
-                    "content" to event.content
-                )).toString(),
-                decryptionSettings = decryptionSettings,
-                handleVerificationEvents = false,
-                strictShields = false
-            )
+                crypto.OlmMachineManager.olmMachine!!.decryptRoomEvent(
+                    roomId = roomId,
+                    event = JsonObject(mapOf(
+                        "type" to JsonPrimitive(event.type),
+                        "event_id" to JsonPrimitive(event.event_id),
+                        "sender" to JsonPrimitive(event.sender),
+                        "origin_server_ts" to JsonPrimitive(event.origin_server_ts),
+                        "content" to event.content
+                    )).toString(),
+                    decryptionSettings = decryptionSettings,
+                    handleVerificationEvents = false,
+                    strictShields = false
+                )
+            }
 
             // Parse the decrypted event from the clearEvent field
             val clearEventJson = decryptedEvent.clearEvent
@@ -145,6 +158,9 @@ class MessageDecryptor {
                 type = clearEvent["type"]?.jsonPrimitive?.content ?: "m.room.message",
                 content = clearEvent["content"] ?: JsonObject(emptyMap())
             )
+        } catch (e: TimeoutCancellationException) {
+            println("⚠️  Decryption timed out for event ${event.event_id}")
+            createUndecryptableEvent(event, "Decryption timed out")
         } catch (e: Exception) {
             println("⚠️  Failed to decrypt event ${event.event_id}: ${e.message}")
             createUndecryptableEvent(event, getDecryptionErrorMessage(e))

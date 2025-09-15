@@ -413,11 +413,15 @@ suspend fun ensureRoomEncryption(roomId: String): Boolean {
         println("🔍 Room members: $allRoomMembers")
 
         // Update tracked users to ensure OlmMachine knows about them
-        machine.updateTrackedUsers(allRoomMembers)
+        withTimeout(5000L) {
+            machine.updateTrackedUsers(allRoomMembers)
+        }
 
         // Send any outgoing requests (like keys query) before sharing room key
         println("🔄 Calling machine.outgoingRequests() in RoomEncryptionManager...")
-        val initialRequests = machine.outgoingRequests()
+        val initialRequests = withTimeout(5000L) {
+            machine.outgoingRequests()
+        }
         println("📋 Got ${initialRequests.size} initial requests from OlmMachine")
         requestProcessor.processOutgoingRequests(initialRequests)
 
@@ -465,11 +469,15 @@ suspend fun isMultiDeviceRoom(roomMembers: List<String>): Boolean {
 
     for (userId in roomMembers) {
         try {
-            val devices = machine.getUserDevices(userId, 10000u) // 10 second timeout
+            val devices = withTimeout(5000L) { // 5 second timeout per user
+                machine.getUserDevices(userId, 10000u) // 10 second timeout
+            }
             if (devices.size > 1) {
                 println("🔍 User $userId has ${devices.size} devices")
                 return true
             }
+        } catch (e: TimeoutCancellationException) {
+            println("⚠️  getUserDevices timed out for $userId")
         } catch (e: Exception) {
             println("⚠️  Error checking devices for $userId: ${e.message}")
         }

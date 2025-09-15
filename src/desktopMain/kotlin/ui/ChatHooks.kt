@@ -48,7 +48,7 @@ fun useMessageLoading(roomId: String): MessageLoadingState {
 
     // Load messages on room change
     LaunchedEffect(roomId) {
-        scope.launch {
+        scope.launch(Dispatchers.IO) {
             try {
                 println("🔄 ChatScreen: Loading messages for room $roomId")
                 isLoading = true // Ensure loading state is set
@@ -133,7 +133,7 @@ fun useEncryptionSetup(roomId: String) {
     val scope = rememberCoroutineScope()
 
     LaunchedEffect(roomId) {
-        scope.launch {
+        scope.launch(Dispatchers.IO) {
             try {
                 println("🔐 Proactively setting up encryption for room $roomId")
                 val encryptionResult = withTimeout(15000L) { // 15 second timeout
